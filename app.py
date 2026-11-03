@@ -374,25 +374,23 @@ with tab_mapa:
         'RIO GRANDE': [-53.7876, -67.7025]
     }
     
-    # Obtenemos todas las tareas agrupadas/evaluadas por región para determinar el estado general del lugar
     df_mapa_raw = pd.read_sql("SELECT ticket, region, pilar, estado, fecha_creacion, fecha_cierre FROM tareas", conn)
     
-    if not df_mapa_data_empty := df_mapa_raw.empty:
-        # Agrupar por región para definir el estatus general del sitio
+    if df_mapa_raw.empty:
+        st.info("No hay datos geográficos para mostrar en el mapa.")
+    else:
         regiones_uniques = df_mapa_raw['region'].dropna().unique()
         
         for reg in regiones_uniques:
             reg_key = str(reg).strip().upper()
-            coords = [-34.6037, -58.3816] # Default AMBA
+            coords = [-34.6037, -58.3816]
             for key, val in coordenadas_regiones.items():
                 if key in reg_key:
                     coords = val
                     break
             
-            # Tareas de esta región específica
             df_reg_tareas = df_mapa_raw[df_mapa_raw['region'] == reg]
             
-            # --- EVALUACIÓN DE JERARQUÍA DE ESTADO DEL LUGAR ---
             color_marcador = 'blue'
             icon_marcador = 'info-sign'
             estado_sitio = "ACTIVO / RUTINA"
@@ -404,7 +402,6 @@ with tab_mapa:
             for _, t_row in df_reg_tareas.iterrows():
                 est = str(t_row['estado']).upper()
                 if est in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
-                    # Verificar si supera las 24h (Alerta SLA)
                     try:
                         f_cr = datetime.strptime(str(t_row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
                         if (datetime.now() - f_cr) > timedelta(hours=24):
@@ -414,7 +411,6 @@ with tab_mapa:
                     except:
                         tiene_pendiente = True
                 elif est == 'COMPLETA':
-                    # Verificar si fue completada hace menos de 15 días
                     f_cierre_str = str(t_row['fecha_cierre']) if pd.notna(t_row['fecha_cierre']) and t_row['fecha_cierre'] != '' else str(t_row['fecha_creacion'])
                     try:
                         f_cie = datetime.strptime(f_cierre_str, "%Y-%m-%d %H:%M:%S")
@@ -423,7 +419,6 @@ with tab_mapa:
                     except:
                         pass
 
-            # Prioridad de colores: ROJO (Alerta) > AMARILLO/AZUL (Pendiente nuevo) > VERDE (Completa <15 días) > AZUL (Normal/Inactivo)
             if tiene_alerta:
                 color_marcador = 'red'
                 icon_marcador = 'warning-sign'
@@ -441,7 +436,6 @@ with tab_mapa:
                 icon_marcador = 'ok'
                 estado_sitio = "🔵 SIN CASOS ACTIVOS (>15 días de cerrado)"
 
-            # Armar resumen de tickets activos o recientes para el popup
             tickets_str = ", ".join(df_reg_tareas['ticket'].astype(str).unique())
             popup_text = f"<b>Región:</b> {reg}<br><b>Estatus Lugar:</b> {estado_sitio}<br><b>Tickets:</b> {tickets_str}"
             popup_popup = folium.Popup(popup_text, max_width=300)
