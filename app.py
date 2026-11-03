@@ -8,6 +8,17 @@ from streamlit_folium import st_folium
 # Configuración inicial de la página
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
 
+# 🎨 ESTILOS CSS PERSONALIZADOS: Ocultar el menú de Streamlit y el indicador de estado inferior derecho
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stStatusWidget {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # Función para conectar a la base de datos e inicializar tablas
 def get_connection():
     conn = sqlite3.connect("operaciones_backbone.db")
@@ -55,7 +66,7 @@ def get_connection():
 conn = get_connection()
 cursor = conn.cursor()
 
-# --- BARRA LATERAL (SIDEBAR) ---
+# --- BARRA LATERAL (SIDEBAR LIMPIA) ---
 st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
@@ -70,7 +81,6 @@ if uploaded_files:
                 df_temp.columns = [str(c).strip().lower() for c in df_temp.columns]
                 
                 for _, row in df_temp.iterrows():
-                    # Extraer número de ticket único
                     ticket_val = str(row.get('ticket', row.get('n° de boleta', row.get('boleta', row.get('caso', 'S/N'))))).strip()
                     reg = str(row.get('región', row.get('region', row.get('zona', row.get('localidad', 'AMBA')))))
                     pil = str(row.get('pilar', row.get('contrato', row.get('proyecto', 'Demand General'))))
@@ -86,7 +96,6 @@ if uploaded_files:
                     fecha_raw = row.get('fecha', row.get('fecha_creacion', None))
                     fecha_creacion = str(fecha_raw) if pd.notna(fecha_raw) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # 🛡️ NORMA TÉCNICA: Control de unicidad estricto por N° de Ticket
                     if ticket_val != 'S/N' and ticket_val != '':
                         cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_val,))
                         existe = cursor.fetchone()[0] > 0
@@ -104,17 +113,12 @@ if uploaded_files:
                         total_duplicados += 1
                         
                 conn.commit()
-                st.sidebar.success(f"Archivo {uploaded_file.name}: {total_nuevos} nuevos, {total_duplicados} duplicados por ticket omitidos.")
+                # 🍞 Notificación flotante temporal en lugar de texto fijo estorboso
+                st.toast(f"✅ Archivo {uploaded_file.name}: {total_nuevos} nuevos, {total_duplicados} omitidos.", icon="📊")
             except Exception as e:
-                st.sidebar.error(f"Error procesando {uploaded_file.name}: {e}")
+                st.toast(f"❌ Error en {uploaded_file.name}: {e}", icon="⚠️")
                 
-        st.sidebar.success(f"¡Proceso completado! Total de casos nuevos incorporados: {total_nuevos}.")
-
-if st.sidebar.button("🗑️ Limpiar Base de Datos (Reiniciar a Cero)"):
-    cursor.execute("DELETE FROM tareas")
-    conn.commit()
-    st.sidebar.warning("Base de datos limpiada correctamente.")
-    st.rerun()
+        st.success(f"¡Proceso completado! Casos nuevos incorporados: {total_nuevos}.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
@@ -134,22 +138,21 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             desc_completa = f"Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
             
-            # Validación por Ticket
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_input.strip(),))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.warning(f"⚠️ El Ticket '{ticket_input}' ya se encuentra registrado en el sistema.")
+                st.sidebar.warning(f"⚠️ El Ticket '{ticket_input}' ya existe.")
             else:
                 cursor.execute("""
                     INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
                     VALUES (?, ?, ?, ?, ?, ?, '', '')
                 """, (ticket_input.strip(), localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
                 conn.commit()
-                st.sidebar.success("¡Operación registrada con éxito!")
+                st.toast("¡Operación registrada con éxito!", icon="🚀")
         else:
-            st.sidebar.warning("Por favor, complete el N° de boleta/ticket y el detalle.")
+            st.sidebar.warning("Complete el ticket y detalle.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Cierre Manual y Auditoría (Jefe de Operaciones)")
+st.sidebar.markdown("### 🛠️ Cierre Manual (Jefe Ops)")
 df_pendientes_edicion = pd.read_sql("SELECT id, ticket, pilar, estado FROM tareas WHERE estado != 'COMPLETA'", conn)
 
 if not df_pendientes_edicion.empty:
@@ -158,9 +161,9 @@ if not df_pendientes_edicion.empty:
     id_objetivo = tarea_opciones[seleccion_key]
     
     nuevo_estado_jefe = st.sidebar.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA"], key="est_jefe")
-    nota_justificacion = st.sidebar.text_area("Nota / Justificación Operativa (Obligatorio si hay fuera de fecha)", placeholder="Motivo del cierre manual...")
+    nota_justificacion = st.sidebar.text_area("Nota / Justificación (Obligatoria si hay atraso)", placeholder="Motivo de corrección...")
     
-    if st.sidebar.button("Aplicar Cierre / Modificación"):
+    if st.sidebar.button("Aplicar Cierre Manual"):
         fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             UPDATE tareas 
@@ -168,16 +171,15 @@ if not df_pendientes_edicion.empty:
             WHERE id = ?
         """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, id_objetivo))
         conn.commit()
-        st.sidebar.success(f"¡Caso #{id_objetivo} actualizado correctamente con fecha {fecha_correccion}!")
+        st.toast(f"¡Caso #{id_objetivo} actualizado!", icon="🔒")
         st.rerun()
-else:
-    st.sidebar.caption("No hay casos pendientes para cierre manual.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔍 Filtros de Visualización")
-solo_pendientes = st.sidebar.checkbox("Solo Mostrar Tareas Pendientes / Coordinar")
-filtro_estado = st.sidebar.selectbox("Filtrar por Estado", ["Todos", "PENDIENTE", "PROCESO", "COMPLETA", "COORDINAR", "RECOORDINADA", "CANCELADA"])
-filtro_pilar = st.sidebar.selectbox("Filtrar por Contrato / Pilar", ["Todos", "Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"])
+if st.sidebar.button("🗑️ Limpiar Base de Datos (Cero)"):
+    cursor.execute("DELETE FROM tareas")
+    conn.commit()
+    st.toast("Base de datos reiniciada.", icon="🗑️")
+    st.rerun()
 
 
 # --- INTERFAZ PRINCIPAL ---
@@ -187,6 +189,18 @@ st.markdown("---")
 tab_gestion, tab_mapa = st.tabs(["📊 Tablero y Gestión", "🗺️ Mapa Logístico y Cercanía"])
 
 with tab_gestion:
+    # 🔍 BARRA DE FILTROS SUPERIOR (Organizada de forma espaciosa y profesional)
+    with st.expander("🔍 Filtros de Visualización Avanzada y Búsqueda", expanded=False):
+        f_col1, f_col2, f_col3 = st.columns(3)
+        with f_col1:
+            solo_pendientes = st.checkbox("Solo Mostrar Pendientes / Coordinar")
+        with f_col2:
+            filtro_estado = st.selectbox("Filtrar por Estado", ["Todos", "PENDIENTE", "PROCESO", "COMPLETA", "COORDINAR", "RECOORDINADA", "CANCELADA"])
+        with f_col3:
+            filtro_pilar = st.selectbox("Filtrar por Contrato / Pilar", ["Todos", "Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"])
+
+    st.markdown("")
+
     query_base = "SELECT * FROM tareas WHERE 1=1"
     params = []
     if solo_pendientes:
@@ -214,6 +228,7 @@ with tab_gestion:
                 except:
                     pass
 
+    # Tarjetas de Métricas Superiores
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown("**Responsable AMBA**")
