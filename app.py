@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import folium
 from streamlit_folium import st_folium
 
-# Configuración inicial de la página
+# Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
 
 # 🎨 ESTILOS CSS: Ocultar menús nativos y widgets de Streamlit
@@ -323,6 +323,7 @@ with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Estatus por Localidad")
     st.write("Visualización a nivel nacional: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
     
+    # 🗺️ Mapa expandido al ancho total de la pantalla (width=1400, height=650)
     m = folium.Map(location=[-40.0, -64.0], zoom_start=4)
     
     coordenadas_regiones = {
@@ -447,4 +448,5 @@ with tab_mapa:
                 icon=folium.Icon(color=color_marcador, icon=icon_marcador, prefix='glyphicon')
             ).add_to(m)
             
-    st_folium(m, width=1100, height=550)
+    # Mapeo renderizado con ancho optimizado para ocupar la pantalla completa
+    st_folium(m, width=1400, height=650)
