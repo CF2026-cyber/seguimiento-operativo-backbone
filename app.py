@@ -277,21 +277,18 @@ with tab_gestion:
     # --- DASHBOARD ANALÍTICO MEJORADO ---
     st.markdown("#### 📊 Dashboard y Métricas Analíticas")
     
-    # Selector adicional para el Dashboard (Completa, Pendiente o con Alerta)
     dash_filtro = st.radio(
         "Filtrar vista del Dashboard:",
         ["General (Todos)", "🟢 Completa", "⏳ Pendiente / En Proceso", "⚠️ Con Alerta SLA (>24h)"],
         horizontal=True
     )
     
-    # Filtrar DataFrame para los gráficos según la selección del dashboard
     df_dash = df_todas.copy()
     if dash_filtro == "🟢 Completa":
         df_dash = df_dash[df_dash['estado'].str.upper() == 'COMPLETA']
     elif dash_filtro == "⏳ Pendiente / En Proceso":
         df_dash = df_dash[df_dash['estado'].str.upper().isin(['PENDIENTE', 'PROCESO', 'COORDINAR'])]
     elif dash_filtro == "⚠️ Con Alerta SLA (>24h)":
-        # Filtrar solo las que superan 24h y están activas
         ids_con_alerta = []
         for _, row in df_dash.iterrows():
             if str(row['estado']).upper() in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
@@ -326,10 +323,8 @@ with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Cobertura Operativa")
     st.write("Visualización cartográfica en tiempo real de los posicionamientos registrados en los archivos y cargas.")
     
-    # Mapa interactivo con Folium centrado en Argentina
     m = folium.Map(location=[-34.6037, -58.3816], zoom_start=5)
     
-    # Coordenadas aproximadas de referencia para ubicar automáticamente las regiones comunes
     coordenadas_regiones = {
         'AMBA': [-34.6037, -58.3816],
         'BUENOS AIRES': [-34.6037, -58.3816],
@@ -343,23 +338,24 @@ with tab_mapa:
         'NEUQUEN': [-38.9516, -68.0591]
     }
     
-    # Consultar todas las regiones/localidades de la base de datos para poner los marcadores
     df_mapa_data = pd.read_sql("SELECT DISTINCT region, ticket, pilar, descripcion FROM tareas", conn)
     
     if not df_mapa_data.empty:
         for _, row in df_mapa_data.iterrows():
             reg_key = str(row['region']).strip().upper()
-            # Buscar coincidencia parcial o usar AMBA por defecto
-            coords = [-34.6037, -58.3816] # Default AMBA
+            coords = [-34.6037, -58.3816]
             for key, val in coordenadas_regiones.items():
                 if key in reg_key:
                     coords = val
                     break
             
             popup_text = f"<b>Ticket:</b> {row['ticket']}<br><b>Región:</b> {row['region']}<br><b>Pilar:</b> {row['pilar']}"
+            
+            # Corrección aplicada aquí (separación del Popup limpio)
+            popup_popup = folium.Popup(popup_text, max_width=300)
             folium.Marker(
                 location=coords,
-                popup=popup_popup := folium.Popup(popup_text, max_width=300),
+                popup=popup_popup,
                 tooltip=f"Región: {row['region']} (Ticket: {row['ticket']})"
             ).add_to(m)
             
