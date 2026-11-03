@@ -373,7 +373,7 @@ with tab_mapa:
         'TRELEW': [-43.2489, -65.3056],
         'RAWSON': [-43.3002, -65.1023],
         'PUERTO MADRYN': [-42.7692, -65.0385],
-        'COMODORO RIVADAVIA': [-45.8641, -67.48),
+        'COMODORO RIVADAVIA': [-45.8641, -67.48],
         'SANTA CRUZ': [-49.3845, -67.9231],
         'RIO GALLEGOS': [-51.6226, -69.2181],
         'CALETA OLIVIA': [-46.4384, -67.5256],
