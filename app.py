@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 # Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
 
-# 🎨 ESTILOS CSS AVANZADOS: Ocultar menús nativos, pie de página y la barra flotante de gestión de Streamlit
+# 🎨 ESTILOS CSS: Ocultar menús nativos, pie de página y widgets de Streamlit
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -16,12 +16,11 @@ hide_streamlit_style = """
     .stStatusWidget {visibility: hidden;}
     header {visibility: hidden;}
     [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
-    .viewerBadge_container__1QSob {visibility: hidden; display: none;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# Función para conectar a la base de datos e inicializar tablas
+# Función para conectar a la base de datos e inicializar tablas y usuarios
 def get_connection():
     conn = sqlite3.connect("operaciones_backbone.db")
     cursor = conn.cursor()
@@ -55,6 +54,29 @@ def get_connection():
         )
     """)
     
+    # 🔐 Tabla de Usuarios y Roles
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            nombre_completo TEXT
+        )
+    """)
+    
+    # Insertar usuarios por defecto si la tabla está vacía
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    if cursor.fetchone()[0] == 0:
+        # Credenciales por defecto (puedes modificarlas o agregar más desde la base de datos)
+        usuarios_iniciales = [
+            ('jefe.ops', 'jefe123', 'Jefe de Operaciones', 'Claudio / Supervisor General'),
+            ('operador1', 'op123', 'Operador', 'Auxiliar Operativo 1'),
+            ('operador2', 'op123', 'Operador', 'Auxiliar Operativo 2')
+        ]
+        cursor.executemany("INSERT INTO usuarios (username, password, rol, nombre_completo) VALUES (?, ?, ?, ?)", usuarios_iniciales)
+        conn.commit()
+        
     cursor.execute("SELECT COUNT(*) FROM regiones")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO regiones (nombre) VALUES ('AMBA')")
@@ -68,7 +90,52 @@ def get_connection():
 conn = get_connection()
 cursor = conn.cursor()
 
-# --- BARRA LATERAL (SIDEBAR: INGESTA, BÚSQUEDA Y BOTÓN DE REFRESCO) ---
+# --- GESTIÓN DE SESIÓN Y LOGIN ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.rol = ""
+    st.session_state.nombre_completo = ""
+
+# Si no ha iniciado sesión, mostrar pantalla de Login limpia y corporativa
+if not st.session_state.logged_in:
+    col_l1, col_l2, col_l3 = st.columns([1, 1.5, 1])
+    with col_l2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("### 🔐 Acceso al Sistema - Seguridad Física Fnet")
+        st.caption("Ingrese sus credenciales corporativas para continuar.")
+        
+        with st.form("form_login"):
+            user_input = st.text_input("Usuario")
+            pass_input = st.text_input("Contraseña", type="password")
+            btn_login = st.form_submit_button("Ingresar a la Plataforma")
+            
+            if btn_login:
+                cursor.execute("SELECT rol, nombre_completo FROM usuarios WHERE username = ? AND password = ?", (user_input.strip(), pass_input.strip()))
+                resultado = cursor.fetchone()
+                if resultado:
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_input.strip()
+                    st.session_state.rol = resultado[0]
+                    st.session_state.nombre_completo = resultado[1]
+                    st.success(f"¡Bienvenido, {resultado[1]}!")
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+        st.stop()
+
+# --- BARRA LATERAL (SIDEBAR) PARA USUARIOS AUTENTICADOS ---
+st.sidebar.markdown(f"### 👤 Sesión Activa")
+st.sidebar.info(f"**{st.session_state.nombre_completo}**\n\nRol: `{st.session_state.rol}`")
+
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.rol = ""
+    st.session_state.nombre_completo = ""
+    st.rerun()
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔄 Control de Pantalla")
 if st.sidebar.button("🔄 Actualizar / Refrescar Panel"):
     st.rerun()
@@ -157,50 +224,52 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
         else:
             st.sidebar.warning("Complete el ticket y detalle.")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Cierre Manual y Búsqueda (Jefe Ops)")
+# 👑 ZONA EXCLUSIVA PARA EL JEFE DE OPERACIONES (ADMIN)
+if st.session_state.rol == 'Jefe de Operaciones':
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🛠️ Cierre Manual y Búsqueda (Jefe Ops)")
 
-ticket_buscado = st.sidebar.text_input("Buscar Ticket / Boleta", placeholder="Ej: TA-26-37457 o INC...")
+    ticket_buscado = st.sidebar.text_input("Buscar Ticket / Boleta", placeholder="Ej: TA-26-37457 o INC...")
 
-if ticket_buscado.strip():
-    query_busqueda = "SELECT id, ticket, region, pilar, estado, fecha_creacion FROM tareas WHERE ticket LIKE ?"
-    df_encontrado = pd.read_sql(query_busqueda, conn, params=(f"%{ticket_buscado.strip()}%",))
-    
-    if not df_encontrado.empty:
-        st.sidebar.success(f"¡Se encontraron {len(df_encontrado)} caso(s)!")
+    if ticket_buscado.strip():
+        query_busqueda = "SELECT id, ticket, region, pilar, estado, fecha_creacion FROM tareas WHERE ticket LIKE ?"
+        df_encontrado = pd.read_sql(query_busqueda, conn, params=(f"%{ticket_buscado.strip()}%",))
         
-        for _, row_caso in df_encontrado.iterrows():
-            st.sidebar.markdown(f"**ID #{row_caso['id']} | Ticket: {row_caso['ticket']}**")
-            st.sidebar.caption(f"Región: {row_caso['region']} | Estado Actual: {row_caso['estado']}")
+        if not df_encontrado.empty:
+            st.sidebar.success(f"¡Se encontraron {len(df_encontrado)} caso(s)!")
             
-            with st.sidebar.form(f"form_cierre_{row_caso['id']}"):
-                nuevo_estado_jefe = st.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA", "PENDIENTE"], index=0, key=f"est_{row_caso['id']}")
-                nota_justificacion = st.text_area("Nota / Justificación (Auditoría)", placeholder="Motivo de corrección o cierre fuera de término...", key=f"nota_{row_caso['id']}")
+            for _, row_caso in df_encontrado.iterrows():
+                st.sidebar.markdown(f"**ID #{row_caso['id']} | Ticket: {row_caso['ticket']}**")
+                st.sidebar.caption(f"Región: {row_caso['region']} | Estado Actual: {row_caso['estado']}")
                 
-                btn_aplicar = st.form_submit_button("Aplicar Modificación")
-                
-                if btn_aplicar:
-                    fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    cursor.execute("""
-                        UPDATE tareas 
-                        SET estado = ?, fecha_cierre = ?, nota_cierre = ?
-                        WHERE id = ?
-                    """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
-                    conn.commit()
-                    st.toast(f"¡Caso #{row_caso['id']} actualizado correctamente!", icon="🔒")
-                    st.rerun()
-            st.sidebar.markdown("---")
+                with st.sidebar.form(f"form_cierre_{row_caso['id']}"):
+                    nuevo_estado_jefe = st.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA", "PENDIENTE"], index=0, key=f"est_{row_caso['id']}")
+                    nota_justificacion = st.text_area("Nota / Justificación (Auditoría)", placeholder="Motivo de corrección o cierre fuera de término...", key=f"nota_{row_caso['id']}")
+                    
+                    btn_aplicar = st.form_submit_button("Aplicar Modificación")
+                    
+                    if btn_aplicar:
+                        fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        cursor.execute("""
+                            UPDATE tareas 
+                            SET estado = ?, fecha_cierre = ?, nota_cierre = ?
+                            WHERE id = ?
+                        """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
+                        conn.commit()
+                        st.toast(f"¡Caso #{row_caso['id']} actualizado correctamente!", icon="🔒")
+                        st.rerun()
+                st.sidebar.markdown("---")
+        else:
+            st.sidebar.warning("No se encontró ningún caso con ese N° de Ticket.")
     else:
-        st.sidebar.warning("No se encontró ningún caso con ese N° de Ticket.")
-else:
-    st.sidebar.caption("💡 Pegue o escriba un N° de Ticket (ej: TA-26-...) para buscarlo y gestionarlo.")
+        st.sidebar.caption("💡 Pegue o escriba un N° de Ticket para gestionarlo.")
 
-st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Limpiar Base de Datos (Cero)"):
-    cursor.execute("DELETE FROM tareas")
-    conn.commit()
-    st.toast("Base de datos reiniciada.", icon="🗑️")
-    st.rerun()
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🗑️ Limpiar Base de Datos (Cero)"):
+        cursor.execute("DELETE FROM tareas")
+        conn.commit()
+        st.toast("Base de datos reiniciada.", icon="🗑️")
+        st.rerun()
 
 
 # --- INTERFAZ PRINCIPAL ---
@@ -411,7 +480,7 @@ with tab_mapa:
                     coords = val
                     break
             
-            df_reg_tareas = df_mapa_raw[df_mapa_raw['region'] == reg]
+            df_reg_tareas = df_map_raw[df_map_raw['region'] == reg]
             
             color_marcador = 'blue'
             icon_marcador = 'info-sign'
