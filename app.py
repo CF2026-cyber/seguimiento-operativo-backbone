@@ -4,6 +4,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 import folium
 from streamlit_folium import st_folium
+from PIL import Image
+import pytesseract
+import re
 
 # Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
@@ -54,7 +57,6 @@ def get_connection():
         )
     """)
     
-    # 🔐 Tabla de Usuarios y Roles
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,10 +67,8 @@ def get_connection():
         )
     """)
     
-    # Insertar usuarios por defecto si la tabla está vacía
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
-        # Credenciales por defecto (puedes modificarlas o agregar más desde la base de datos)
         usuarios_iniciales = [
             ('jefe.ops', 'jefe123', 'Jefe de Operaciones', 'Claudio / Supervisor General'),
             ('operador1', 'op123', 'Operador', 'Auxiliar Operativo 1'),
@@ -97,7 +97,6 @@ if 'logged_in' not in st.session_state:
     st.session_state.rol = ""
     st.session_state.nombre_completo = ""
 
-# Si no ha iniciado sesión, mostrar pantalla de Login limpia y corporativa
 if not st.session_state.logged_in:
     col_l1, col_l2, col_l3 = st.columns([1, 1.5, 1])
     with col_l2:
@@ -139,6 +138,49 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔄 Control de Pantalla")
 if st.sidebar.button("🔄 Actualizar / Refrescar Panel"):
     st.rerun()
+
+# --- NUEVO: CARGA DE TAREAS DESDE IMAGEN (CORREO / MENSAJE) ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📸 Carga por Imagen (Correo / Mensaje)")
+img_file = st.sidebar.file_uploader("Sube captura (WhatsApp / Email)", type=["png", "jpg", "jpeg"])
+
+if img_file:
+    img = Image.open(img_file)
+    st.sidebar.image(img, caption="Captura cargada", use_container_width=True)
+    
+    pilar_img = st.sidebar.selectbox("Contrato / Pilar (Imagen)", ["Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"], key="p_img")
+    localidad_img = st.sidebar.selectbox("Localidad (Imagen)", ["AMBA", "Córdoba", "Rosario", "Catamarca", "Neuquén", "Bariloche", "Comodoro Rivadavia"], key="l_img")
+    
+    if st.sidebar.button("🔍 Procesar Imagen y Registrar"):
+        try:
+            # Extraer texto usando Tesseract OCR
+            texto_extraido = pytesseract.image_to_string(img)
+            
+            # Intentar buscar un patrón de ticket común (ej: TA-26-... o INC...)
+            match_ticket = re.search(r'(TA-\d+-\d+|INC\d+)', texto_extraido, re.IGNORECASE)
+            ticket_detectado = match_ticket.group(1).upper() if match_ticket else f"IMG-{datetime.now().strftime('%m%d%H%M%S')}"
+            
+            # Limpiar y preparar descripción con el texto extraído
+            desc_limpia = " ".join(texto_extraido.split()).strip()
+            if not desc_limpia:
+                desc_limpia = "Carga por demanda desde captura de mensaje/correo"
+                
+            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 🛡️ NORMA ANTI-DUPLICADOS POR TICKET
+            cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_detectado,))
+            if cursor.fetchone()[0] > 0:
+                st.sidebar.warning(f"⚠️ El Ticket '{ticket_detectado}' extraído de la imagen ya existe en el sistema. No se duplicó.")
+            else:
+                cursor.execute("""
+                    INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
+                    VALUES (?, ?, ?, ?, 'PENDIENTE', ?, '', '')
+                """, (ticket_detectado, localidad_img, pilar_img, f"OCR Text: {desc_limpia[:300]}", fecha_actual))
+                conn.commit()
+                st.toast(f"¡Tarea {ticket_detectado} registrada con éxito desde la imagen!", icon="📸")
+                st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Error procesando la imagen con OCR: {e}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
@@ -480,7 +522,7 @@ with tab_mapa:
                     coords = val
                     break
             
-            df_reg_tareas = df_map_raw[df_map_raw['region'] == reg]
+            df_reg_tareas = df_mapa_raw[df_mapa_raw['region'] == reg]
             
             color_marcador = 'blue'
             icon_marcador = 'info-sign'
