@@ -57,8 +57,10 @@ st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.sidebar.button("⚙️ Procesar e Importar Archivos"):
+    if st.sidebar.button("⚙️ Procesar (Sin Duplicados)"):
         total_nuevos = 0
+        total_duplicados = 0
+        
         for uploaded_file in uploaded_files:
             try:
                 df_temp = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_file)
@@ -67,19 +69,35 @@ if uploaded_files:
                 for _, row in df_temp.iterrows():
                     reg = str(row.get('Región', row.get('region', row.get('Zona', 'AMBA'))))
                     pil = str(row.get('Pilar', row.get('pilar', row.get('Contrato', 'Demand General'))))
-                    desc = str(row.get('Descripción', row.get('descripcion', row.get('Detalle', 'Carga Masiva Excel'))))
+                    desc = str(row.get('Descripción', row.get('descripcion', row.get('Detalle', 'Carga Masiva Excel')))).strip()
                     est = str(row.get('Estado', row.get('estado', 'PENDIENTE'))).upper()
                     
-                    cursor.execute("""
-                        INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (reg, pil, desc, est, fecha_actual))
-                    total_nuevos += 1
+                    # 🛡️ NORMA ANTI-DUPLICADOS: Verificamos si esta descripción/ticket exacto ya existe
+                    cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc,))
+                    existe = cursor.fetchone()[0] > 0
+                    
+                    if not existe:
+                        cursor.execute("""
+                            INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (reg, pil, desc, est, fecha_actual))
+                        total_nuevos += 1
+                    else:
+                        total_duplicados += 1
+                        
                 conn.commit()
-                st.sidebar.success(f"¡{uploaded_file.name} importado ({len(df_temp)} registros)!")
+                st.sidebar.success(f"Archivo {uploaded_file.name}: {total_nuevos} importados, {total_duplicados} duplicados omitidos.")
             except Exception as e:
                 st.sidebar.error(f"Error procesando {uploaded_file.name}: {e}")
-        st.sidebar.success(f"¡Proceso finalizado! Se registraron {total_nuevos} filas en total.")
+                
+        st.sidebar.success(f"¡Proceso completado! Nuevos registros unicos: {total_nuevos}.")
+
+# Botón de emergencia para limpiar base de datos si quedaron los 77 mil duplicados
+if st.sidebar.button("🗑️ Limpiar Base de Datos (Reiniciar a Cero)"):
+    cursor.execute("DELETE FROM tareas")
+    conn.commit()
+    st.sidebar.warning("Base de datos limpiada. Ahora puedes reimportar sin duplicados.")
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
@@ -99,16 +117,17 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             desc_completa = f"Ticket: {ticket_input} | Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
             
-            cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion LIKE ?", (f"%{ticket_input}%",))
+            # Validación también en carga manual
+            cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc_completa,))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.warning(f"⚠️ Alerta: El ticket {ticket_input} ya registra una tarea previa.")
-            
-            cursor.execute("""
-                INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
-                VALUES (?, ?, ?, ?, ?)
-            """, (localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
-            conn.commit()
-            st.sidebar.success("¡Operación registrada!")
+                st.sidebar.warning(f"⚠️ Operación cancelada: Este ticket y detalle ya existen en el sistema.")
+            else:
+                cursor.execute("""
+                    INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
+                conn.commit()
+                st.sidebar.success("¡Operación registrada con éxito!")
         else:
             st.sidebar.warning("Por favor, complete el N° de boleta y el detalle.")
 
@@ -126,7 +145,6 @@ st.markdown("---")
 tab_gestion, tab_mapa = st.tabs(["📊 Tablero y Gestión", "🗺️ Mapa Logístico y Cercanía"])
 
 with tab_gestion:
-    # Consulta general de tareas
     query_base = "SELECT * FROM tareas WHERE 1=1"
     params = []
     if solo_pendientes:
