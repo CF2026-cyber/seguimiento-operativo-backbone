@@ -139,7 +139,7 @@ st.sidebar.markdown("### 🔄 Control de Pantalla")
 if st.sidebar.button("🔄 Actualizar / Refrescar Panel"):
     st.rerun()
 
-# --- NUEVO: CARGA DE TAREAS DESDE IMAGEN (CORREO / MENSAJE) ---
+# --- CARGA DE TAREAS DESDE IMAGEN (CORREO / MENSAJE) CON ALERTA CLARA ---
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📸 Carga por Imagen (Correo / Mensaje)")
 img_file = st.sidebar.file_uploader("Sube captura (WhatsApp / Email)", type=["png", "jpg", "jpeg"])
@@ -153,32 +153,32 @@ if img_file:
     
     if st.sidebar.button("🔍 Procesar Imagen y Registrar"):
         try:
-            # Extraer texto usando Tesseract OCR
             texto_extraido = pytesseract.image_to_string(img)
             
-            # Intentar buscar un patrón de ticket común (ej: TA-26-... o INC...)
+            # Buscar patrones habituales de tickets
             match_ticket = re.search(r'(TA-\d+-\d+|INC\d+)', texto_extraido, re.IGNORECASE)
             ticket_detectado = match_ticket.group(1).upper() if match_ticket else f"IMG-{datetime.now().strftime('%m%d%H%M%S')}"
             
-            # Limpiar y preparar descripción con el texto extraído
             desc_limpia = " ".join(texto_extraido.split()).strip()
             if not desc_limpia:
                 desc_limpia = "Carga por demanda desde captura de mensaje/correo"
                 
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 🛡️ NORMA ANTI-DUPLICADOS POR TICKET
+            # 🛡️ VALIDACIÓN ESTRICTA Y ALERTA VISIBLE DE DUPLICADOS
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_detectado,))
-            if cursor.fetchone()[0] > 0:
-                st.sidebar.warning(f"⚠️ El Ticket '{ticket_detectado}' extraído de la imagen ya existe en el sistema. No se duplicó.")
+            existe = cursor.fetchone()[0] > 0
+            
+            if existe:
+                st.sidebar.error(f"⚠️ ¡ATENCIÓN! El Ticket '{ticket_detectado}' ya se encuentra registrado en el sistema. No se duplicó.")
             else:
                 cursor.execute("""
                     INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
                     VALUES (?, ?, ?, ?, 'PENDIENTE', ?, '', '')
                 """, (ticket_detectado, localidad_img, pilar_img, f"OCR Text: {desc_limpia[:300]}", fecha_actual))
                 conn.commit()
-                st.toast(f"¡Tarea {ticket_detectado} registrada con éxito desde la imagen!", icon="📸")
-                st.rerun()
+                st.sidebar.success(f"✅ ¡Éxito! Tarea nueva '{ticket_detectado}' registrada correctamente.")
+                st.toast(f"¡Tarea {ticket_detectado} registrada con éxito!", icon="📸")
         except Exception as e:
             st.sidebar.error(f"Error procesando la imagen con OCR: {e}")
 
@@ -190,6 +190,7 @@ if uploaded_files:
     if st.sidebar.button("⚙️ Procesar por Ticket (Sin Duplicados)"):
         total_nuevos = 0
         total_duplicados = 0
+        tickets_duplicados_lista = []
         
         for uploaded_file in uploaded_files:
             try:
@@ -227,13 +228,17 @@ if uploaded_files:
                         total_nuevos += 1
                     else:
                         total_duplicados += 1
+                        if ticket_val != 'S/N':
+                            tickets_duplicados_lista.append(ticket_val)
                         
                 conn.commit()
-                st.toast(f"✅ Archivo {uploaded_file.name}: {total_nuevos} nuevos, {total_duplicados} omitidos.", icon="📊")
+                st.sidebar.success(f"📊 Archivo {uploaded_file.name}: {total_nuevos} nuevos incorporados.")
+                if total_duplicados > 0:
+                    st.sidebar.warning(f"⚠️ Se omitieron {total_duplicados} registros por estar duplicados (ya existían en la base).")
             except Exception as e:
-                st.toast(f"❌ Error en {uploaded_file.name}: {e}", icon="⚠️")
+                st.sidebar.error(f"❌ Error en {uploaded_file.name}: {e}")
                 
-        st.success(f"¡Proceso completado! Casos nuevos incorporados: {total_nuevos}.")
+        st.success(f"¡Proceso de ingesta finalizado! Nuevos: {total_nuevos} | Omitidos por duplicidad: {total_duplicados}.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
@@ -255,13 +260,14 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_input.strip(),))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.warning(f"⚠️ El Ticket '{ticket_input}' ya existe.")
+                st.sidebar.error(f"⚠️ ¡ATENCIÓN! El Ticket '{ticket_input.strip()}' ya existe en el sistema. No se puede duplicar.")
             else:
                 cursor.execute("""
                     INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
                     VALUES (?, ?, ?, ?, ?, ?, '', '')
                 """, (ticket_input.strip(), localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
                 conn.commit()
+                st.sidebar.success(f"✅ ¡Operación registrada con éxito para el ticket {ticket_input.strip()}!")
                 st.toast("¡Operación registrada con éxito!", icon="🚀")
         else:
             st.sidebar.warning("Complete el ticket y detalle.")
@@ -298,6 +304,7 @@ if st.session_state.rol == 'Jefe de Operaciones':
                             WHERE id = ?
                         """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
                         conn.commit()
+                        st.sidebar.success(f"¡Caso #{row_caso['id']} actualizado correctamente!")
                         st.toast(f"¡Caso #{row_caso['id']} actualizado correctamente!", icon="🔒")
                         st.rerun()
                 st.sidebar.markdown("---")
