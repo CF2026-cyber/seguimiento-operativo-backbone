@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 # Configuración inicial de la página
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
 
-# 🎨 ESTILOS CSS PERSONALIZADOS: Ocultar el menú de Streamlit y el indicador de estado inferior derecho
+# 🎨 ESTILOS CSS: Ocultar menús nativos y widgets de Streamlit
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -113,7 +113,6 @@ if uploaded_files:
                         total_duplicados += 1
                         
                 conn.commit()
-                # 🍞 Notificación flotante temporal en lugar de texto fijo estorboso
                 st.toast(f"✅ Archivo {uploaded_file.name}: {total_nuevos} nuevos, {total_duplicados} omitidos.", icon="📊")
             except Exception as e:
                 st.toast(f"❌ Error en {uploaded_file.name}: {e}", icon="⚠️")
@@ -189,7 +188,7 @@ st.markdown("---")
 tab_gestion, tab_mapa = st.tabs(["📊 Tablero y Gestión", "🗺️ Mapa Logístico y Cercanía"])
 
 with tab_gestion:
-    # 🔍 BARRA DE FILTROS SUPERIOR (Organizada de forma espaciosa y profesional)
+    # 🔍 BARRA DE FILTROS SUPERIOR
     with st.expander("🔍 Filtros de Visualización Avanzada y Búsqueda", expanded=False):
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
@@ -248,6 +247,7 @@ with tab_gestion:
     if demoras > 0:
         st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que superan las 24 horas de SLA sin cerrarse.")
 
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("#### 📋 Tablero Dinámico de Seguimiento")
 
     if not df_todas.empty:
@@ -271,28 +271,96 @@ with tab_gestion:
     else:
         st.info("No hay tareas registradas con los filtros seleccionados.")
 
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown("---")
+    
+    # --- DASHBOARD ANALÍTICO MEJORADO ---
+    st.markdown("#### 📊 Dashboard y Métricas Analíticas")
+    
+    # Selector adicional para el Dashboard (Completa, Pendiente o con Alerta)
+    dash_filtro = st.radio(
+        "Filtrar vista del Dashboard:",
+        ["General (Todos)", "🟢 Completa", "⏳ Pendiente / En Proceso", "⚠️ Con Alerta SLA (>24h)"],
+        horizontal=True
+    )
+    
+    # Filtrar DataFrame para los gráficos según la selección del dashboard
+    df_dash = df_todas.copy()
+    if dash_filtro == "🟢 Completa":
+        df_dash = df_dash[df_dash['estado'].str.upper() == 'COMPLETA']
+    elif dash_filtro == "⏳ Pendiente / En Proceso":
+        df_dash = df_dash[df_dash['estado'].str.upper().isin(['PENDIENTE', 'PROCESO', 'COORDINAR'])]
+    elif dash_filtro == "⚠️ Con Alerta SLA (>24h)":
+        # Filtrar solo las que superan 24h y están activas
+        ids_con_alerta = []
+        for _, row in df_dash.iterrows():
+            if str(row['estado']).upper() in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
+                try:
+                    f_cr = datetime.strptime(str(row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
+                    if (datetime.now() - f_cr) > timedelta(hours=24):
+                        ids_con_alerta.append(row['id'])
+                except:
+                    pass
+        df_dash = df_dash[df_dash['id'].isin(ids_con_alerta)]
+
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.markdown("#### 📊 Carga por Pilar / Contrato")
-        if not df_todas.empty:
-            conteo_pilar = df_todas['pilar'].value_counts()
+        st.markdown("##### 📊 Carga por Pilar / Contrato")
+        if not df_dash.empty:
+            conteo_pilar = df_dash['pilar'].value_counts()
             st.bar_chart(conteo_pilar)
         else:
-            st.info("Sin datos para graficar.")
+            st.info("Sin datos para graficar con el filtro seleccionado.")
             
     with col_g2:
-        st.markdown("#### 📈 Distribución por Estado")
-        if not df_todas.empty:
-            conteo_estado = df_todas['estado'].value_counts()
+        st.markdown("##### 📈 Distribución por Estado")
+        if not df_dash.empty:
+            conteo_estado = df_dash['estado'].value_counts()
             st.bar_chart(conteo_estado)
         else:
-            st.info("Sin datos para graficar.")
+            st.info("Sin datos para graficar con el filtro seleccionado.")
 
 with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Cobertura Operativa")
-    m = folium.Map(location=[-34.6037, -58.3816], zoom_start=6)
-    folium.Marker([-34.6037, -58.3816], popup="Base AMBA - Francisbel Salazar", tooltip="AMBA").add_to(m)
-    folium.Marker([-31.4201, -64.1888], popup="Base Córdoba - Darío Morais", tooltip="Córdoba").add_to(m)
-    st_folium(m, width=1100, height=500)
+    st.write("Visualización cartográfica en tiempo real de los posicionamientos registrados en los archivos y cargas.")
+    
+    # Mapa interactivo con Folium centrado en Argentina
+    m = folium.Map(location=[-34.6037, -58.3816], zoom_start=5)
+    
+    # Coordenadas aproximadas de referencia para ubicar automáticamente las regiones comunes
+    coordenadas_regiones = {
+        'AMBA': [-34.6037, -58.3816],
+        'BUENOS AIRES': [-34.6037, -58.3816],
+        'CORDOBA': [-31.4201, -64.1888],
+        'ROSARIO': [-32.9468, -60.6393],
+        'SANTA FE': [-31.6333, -60.7000],
+        'CATAMARCA': [-28.4696, -65.7795],
+        'TUCUMAN': [-26.8083, -65.2176],
+        'MENDOZA': [-32.8894, -68.8458],
+        'SALTA': [-24.7821, -65.4232],
+        'NEUQUEN': [-38.9516, -68.0591]
+    }
+    
+    # Consultar todas las regiones/localidades de la base de datos para poner los marcadores
+    df_mapa_data = pd.read_sql("SELECT DISTINCT region, ticket, pilar, descripcion FROM tareas", conn)
+    
+    if not df_mapa_data.empty:
+        for _, row in df_mapa_data.iterrows():
+            reg_key = str(row['region']).strip().upper()
+            # Buscar coincidencia parcial o usar AMBA por defecto
+            coords = [-34.6037, -58.3816] # Default AMBA
+            for key, val in coordenadas_regiones.items():
+                if key in reg_key:
+                    coords = val
+                    break
+            
+            popup_text = f"<b>Ticket:</b> {row['ticket']}<br><b>Región:</b> {row['region']}<br><b>Pilar:</b> {row['pilar']}"
+            folium.Marker(
+                location=coords,
+                popup=popup_popup := folium.Popup(popup_text, max_width=300),
+                tooltip=f"Región: {row['region']} (Ticket: {row['ticket']})"
+            ).add_to(m)
+            
+    st_folium(m, width=1100, height=550)
