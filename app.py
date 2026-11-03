@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import folium
 from streamlit_folium import st_folium
 
@@ -57,30 +57,51 @@ st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.sidebar.button("⚙️ Procesar (Sin Duplicados)"):
+    if st.sidebar.button("⚙️ Procesar e Importar (Sin Duplicados)"):
         total_nuevos = 0
         total_duplicados = 0
         
         for uploaded_file in uploaded_files:
             try:
                 df_temp = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_file)
-                fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Normalizar nombres de columnas a minúsculas para lectura flexible
+                df_temp.columns = [str(c).strip().lower() for c in df_temp.columns]
                 
                 for _, row in df_temp.iterrows():
-                    reg = str(row.get('Región', row.get('region', row.get('Zona', 'AMBA'))))
-                    pil = str(row.get('Pilar', row.get('pilar', row.get('Contrato', 'Demand General'))))
-                    desc = str(row.get('Descripción', row.get('descripcion', row.get('Detalle', 'Carga Masiva Excel')))).strip()
-                    est = str(row.get('Estado', row.get('estado', 'PENDIENTE'))).upper()
+                    # Extraer región / localidad de forma flexible
+                    reg = str(row.get('región', row.get('region', row.get('zona', row.get('localidad', 'AMBA')))))
+                    pil = str(row.get('pilar', row.get('contrato', row.get('proyecto', 'Demand General'))))
                     
-                    # 🛡️ NORMA ANTI-DUPLICADOS: Verificamos si esta descripción/ticket exacto ya existe
-                    cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc,))
+                    # Construir descripción detallada uniendo todas las columnas del Excel
+                    partes_desc = []
+                    for col in df_temp.columns:
+                        val = row.get(col)
+                        if pd.notna(val) and col not in ['región', 'region', 'zona', 'localidad', 'pilar', 'contrato', 'proyecto', 'estado', 'status', 'fecha', 'fecha_creacion', 'date']:
+                            partes_desc.append(f"{col.capitalize()}: {val}")
+                    
+                    desc = " | ".join(partes_desc) if partes_desc else str(row.to_dict())
+                    
+                    # Extraer estado real del Excel
+                    est_raw = row.get('estado', row.get('status', 'PENDIENTE'))
+                    est = str(est_raw).upper() if pd.notna(est_raw) else 'PENDIENTE'
+                    
+                    # Extraer fecha real del Excel si existe, sino usar la actual
+                    fecha_raw = row.get('fecha', row.get('fecha_creacion', row.get('date', None)))
+                    if pd.notna(fecha_raw):
+                        fecha_creacion = str(fecha_raw)
+                    else:
+                        fecha_creacion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 🛡️ Validación anti-duplicados estricta basada en el contenido completo
+                    cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ? AND region = ?", (desc, reg))
                     existe = cursor.fetchone()[0] > 0
                     
                     if not existe:
                         cursor.execute("""
                             INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
                             VALUES (?, ?, ?, ?, ?)
-                        """, (reg, pil, desc, est, fecha_actual))
+                        """, (reg, pil, desc, est, fecha_creacion))
                         total_nuevos += 1
                     else:
                         total_duplicados += 1
@@ -90,13 +111,12 @@ if uploaded_files:
             except Exception as e:
                 st.sidebar.error(f"Error procesando {uploaded_file.name}: {e}")
                 
-        st.sidebar.success(f"¡Proceso completado! Nuevos registros unicos: {total_nuevos}.")
+        st.sidebar.success(f"¡Proceso completado! Total de registros nuevos: {total_nuevos}.")
 
-# Botón de emergencia para limpiar base de datos si quedaron los 77 mil duplicados
 if st.sidebar.button("🗑️ Limpiar Base de Datos (Reiniciar a Cero)"):
     cursor.execute("DELETE FROM tareas")
     conn.commit()
-    st.sidebar.warning("Base de datos limpiada. Ahora puedes reimportar sin duplicados.")
+    st.sidebar.warning("Base de datos limpiada correctamente.")
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -117,10 +137,9 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             desc_completa = f"Ticket: {ticket_input} | Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
             
-            # Validación también en carga manual
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc_completa,))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.warning(f"⚠️ Operación cancelada: Este ticket y detalle ya existen en el sistema.")
+                st.sidebar.warning("⚠️ Este ticket y detalle ya existen en el sistema.")
             else:
                 cursor.execute("""
                     INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
@@ -158,7 +177,19 @@ with tab_gestion:
         
     df_todas = pd.read_sql(query_base, conn, params=params)
     total_tareas = len(df_todas)
-    demoras = len(df_todas[df_todas['estado'].isin(['PENDIENTE', 'PROCESO'])]) if not df_todas.empty else 0
+    
+    # Cálculo real de demoras (>24 horas desde la fecha de creación)
+    demoras = 0
+    ahora = datetime.now()
+    if not df_todas.empty:
+        for _, row in df_todas.iterrows():
+            if str(row['estado']).upper() in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
+                try:
+                    f_creacion = datetime.strptime(str(row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
+                    if (ahora - f_creacion) > timedelta(hours=24):
+                        demoras += 1
+                except:
+                    pass
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -184,7 +215,19 @@ with tab_gestion:
     if not df_todas.empty:
         df_mostrar = df_todas[['id', 'region', 'pilar', 'descripcion', 'estado', 'fecha_creacion']].copy()
         df_mostrar.columns = ['ID', 'Región', 'Pilar', 'Descripción', 'Estado', 'Fecha']
-        df_mostrar['Alerta Demora'] = df_mostrar['Estado'].apply(lambda x: 'En Tiempo' if x == 'COMPLETA' else 'Demora')
+        
+        def evaluar_demora(row):
+            if str(row['Estado']).upper() in ['COMPLETA', 'CANCELADA']:
+                return 'Normal'
+            try:
+                f_creacion = datetime.strptime(str(row['Fecha']), "%Y-%m-%d %H:%M:%S")
+                if (datetime.now() - f_creacion) > timedelta(hours=24):
+                    return 'Demora (>24h)'
+            except:
+                pass
+            return 'En Tiempo'
+
+        df_mostrar['Alerta Demora'] = df_mostrar.apply(evaluar_demora, axis=1)
         
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
     else:
