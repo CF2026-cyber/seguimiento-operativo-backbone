@@ -50,3 +50,13 @@ def get_connection():
         conn.commit()
         
     return conn
+
+# --- INTERFAZ PRINCIPAL PARA EVITAR PANTALLA EN BLANCO ---
+st.title("🛡️ Seguimiento Operativo - Backbone")
+st.subheader("Sistema de Gestión y Control - Seguridad Física Fnet")
+
+# Inicializamos la conexión y creamos las tablas automáticamente
+conn = get_connection()
+
+st.success("¡Base de datos conectada correctamente y tablas inicializadas!")
+st.info("El sistema está listo para operar. Aquí debajo puedes continuar añadiendo tus componentes, pestañas y tablas de gestión.")
