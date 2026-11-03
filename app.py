@@ -214,7 +214,7 @@ with tab_gestion:
     df_todas = pd.read_sql(query_base, conn, params=params)
     total_tareas = len(df_todas)
     
-    # Cálculo de demoras (>24h y sin cierre manual)
+    # 🕒 CÁLCULO UNIFICADO DE DEMORAS (>24h y activo)
     demoras = 0
     ahora = datetime.now()
     if not df_todas.empty:
@@ -321,9 +321,8 @@ with tab_gestion:
 
 with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Estatus por Localidad")
-    st.write("Visualización a nivel nacional: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
+    st.write("Visualización a nivel nacional con la misma regla exacta del tablero: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
     
-    # 🗺️ Mapa expandido al ancho total de la pantalla (width=1400, height=650)
     m = folium.Map(location=[-40.0, -64.0], zoom_start=4)
     
     coordenadas_regiones = {
@@ -400,11 +399,13 @@ with tab_mapa:
             tiene_pendiente = False
             reciente_completa = False
             
+            # --- EVALUACIÓN EXACTA Y COMPARTIDA CON EL TABLERO ---
             for _, t_row in df_reg_tareas.iterrows():
                 est = str(t_row['estado']).upper()
                 if est in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
                     try:
                         f_cr = datetime.strptime(str(t_row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
+                        # Muestra alerta si supera estrictamente 24h
                         if (datetime.now() - f_cr) > timedelta(hours=24):
                             tiene_alerta = True
                         else:
@@ -420,6 +421,7 @@ with tab_mapa:
                     except:
                         pass
 
+            # Jerarquía estricta: Si hay aunque sea UNA tarea con alerta en la región, el sitio se pinta de ROJO
             if tiene_alerta:
                 color_marcador = 'red'
                 icon_marcador = 'warning-sign'
@@ -448,5 +450,4 @@ with tab_mapa:
                 icon=folium.Icon(color=color_marcador, icon=icon_marcador, prefix='glyphicon')
             ).add_to(m)
             
-    # Mapeo renderizado con ancho optimizado para ocupar la pantalla completa
     st_folium(m, width=1400, height=650)
