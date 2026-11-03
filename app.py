@@ -124,7 +124,7 @@ st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
 
 with st.sidebar.form("form_carga_manual", clear_on_submit=True):
     pilar_input = st.selectbox("Contrato / Proyecto", ["Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"])
-    localidad_input = st.selectbox("Localidad", ["AMBA", "Córdoba", "Rosario", "Catamarca"])
+    localidad_input = st.selectbox("Localidad", ["AMBA", "Córdoba", "Rosario", "Catamarca", "Neuquén", "Bariloche", "Comodoro Rivadavia"])
     cliente_input = st.text_input("Cliente / Sitio", placeholder="Ej: CLIENTE ARGENTINA S.A.")
     ticket_input = st.text_input("N° de Boleta / Ticket", placeholder="T4-26-0000")
     detalle_input = st.text_area("Detalle de la Tarea", placeholder="Describa la novedad u operación...")
@@ -321,21 +321,66 @@ with tab_gestion:
 
 with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Cobertura Operativa")
-    st.write("Visualización cartográfica en tiempo real de los posicionamientos registrados en los archivos y cargas.")
+    st.write("Visualización cartográfica nacional en tiempo real (Centro, Norte y Patagonia).")
     
-    m = folium.Map(location=[-34.6037, -58.3816], zoom_start=5)
+    # Mapa centrado geográficamente en el centro de Argentina con zoom óptimo nacional
+    m = folium.Map(location=[-40.0, -64.0], zoom_start=4)
     
+    # 🇦🇷 Diccionario ampliado con cobertura nacional completa (Norte, Centro y Patagonia / Sur)
     coordenadas_regiones = {
+        # AMBA y Buenos Aires
         'AMBA': [-34.6037, -58.3816],
         'BUENOS AIRES': [-34.6037, -58.3816],
+        'LA PLATA': [-34.9214, -57.9545],
+        'MAR DEL PLATA': [-38.0055, -57.5426],
+        'BAHIA BLANCA': [-38.7196, -62.2724],
+        'TANDIL': [-37.3217, -59.1332],
+        'ZARATE': [-34.1025, -59.0305],
+        'PERGAMINO': [-33.8894, -60.5739],
+        
+        # Centro y Litoral
         'CORDOBA': [-31.4201, -64.1888],
         'ROSARIO': [-32.9468, -60.6393],
         'SANTA FE': [-31.6333, -60.7000],
-        'CATAMARCA': [-28.4696, -65.7795],
-        'TUCUMAN': [-26.8083, -65.2176],
+        'PARANA': [-31.7333, -60.5333],
+        'ENTRE RIOS': [-31.7333, -60.5333],
+        'CORRIENTES': [-27.4692, -58.8306],
+        'RESISTENCIA': [-27.4511, -58.9866],
+        'MISIONES': [-27.3671, -55.8961],
+        'POSADAS': [-27.3671, -55.8961],
+        
+        # Cuyo y Noroeste (NOA)
         'MENDOZA': [-32.8894, -68.8458],
+        'SAN JUAN': [-31.5375, -68.5364],
+        'SAN LUIS': [-33.3017, -66.3378],
+        'TUCUMAN': [-26.8083, -65.2176],
         'SALTA': [-24.7821, -65.4232],
-        'NEUQUEN': [-38.9516, -68.0591]
+        'JUJUY': [-24.1858, -65.2994],
+        'SAN SALVADOR DE JUJUY': [-24.1858, -65.2994],
+        'SANTIAGO DEL ESTERO': [-27.7833, -64.2667],
+        'CATAMARCA': [-28.4696, -65.7795],
+        'LA RIOJA': [-29.4131, -66.8558],
+        
+        # Patagonia y Sur (¡Ampliación clave!)
+        'NEUQUEN': [-38.9516, -68.0591],
+        'RIO NEGRO': [-40.8135, -63.0049],
+        'VIEDMA': [-40.8135, -63.0049],
+        'BARILOCHE': [-41.1335, -71.3103],
+        'SAN CARLOS DE BARILOCHE': [-41.1335, -71.3103],
+        'GENERAL ROCA': [-39.0333, -67.5833],
+        'CIPOLLETTI': [-38.9333, -67.9833],
+        'CHUBUT': [-43.2938, -65.1158],
+        'TRELEW': [-43.2489, -65.3056],
+        'RAWSON': [-43.3002, -65.1023],
+        'PUERTO MADRYN': [-42.7692, -65.0385],
+        'COMODORO RIVADAVIA': [-45.8641, -67.48),
+        'SANTA CRUZ': [-49.3845, -67.9231],
+        'RIO GALLEGOS': [-51.6226, -69.2181],
+        'CALETA OLIVIA': [-46.4384, -67.5256],
+        'EL CALAFATE': [-50.3408, -72.2647],
+        'TIERRA DEL FUEGO': [-54.8019, -68.303],
+        'USHUAIA': [-54.8019, -68.303],
+        'RIO GRANDE': [-53.7876, -67.7025]
     }
     
     df_mapa_data = pd.read_sql("SELECT DISTINCT region, ticket, pilar, descripcion FROM tareas", conn)
@@ -343,16 +388,17 @@ with tab_mapa:
     if not df_mapa_data.empty:
         for _, row in df_mapa_data.iterrows():
             reg_key = str(row['region']).strip().upper()
-            coords = [-34.6037, -58.3816]
+            coords = [-34.6037, -58.3816] # Default AMBA si no encuentra coincidencia
+            
+            # Buscar coincidencia exacta o parcial en el diccionario nacional
             for key, val in coordenadas_regiones.items():
                 if key in reg_key:
                     coords = val
                     break
             
             popup_text = f"<b>Ticket:</b> {row['ticket']}<br><b>Región:</b> {row['region']}<br><b>Pilar:</b> {row['pilar']}"
-            
-            # Corrección aplicada aquí (separación del Popup limpio)
             popup_popup = folium.Popup(popup_text, max_width=300)
+            
             folium.Marker(
                 location=coords,
                 popup=popup_popup,
