@@ -2,6 +2,8 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import folium
+from streamlit_folium import st_folium
 
 # Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
@@ -11,7 +13,7 @@ def get_connection():
     conn = sqlite3.connect("operaciones_backbone.db")
     cursor = conn.cursor()
     
-    # Crear tabla de regiones si no existe
+    # Crear tabla de regiones
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS regiones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,7 +21,7 @@ def get_connection():
         )
     """)
     
-    # Crear tabla de técnicos si no existe
+    # Crear tabla de técnicos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tecnicos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +30,7 @@ def get_connection():
         )
     """)
     
-    # Crear tabla de tareas con todos los campos necesarios para el seguimiento y réplicas
+    # Crear tabla de tareas con todos los campos operativos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,15 +57,34 @@ def get_connection():
 conn = get_connection()
 cursor = conn.cursor()
 
-# --- BARRA LATERAL (SIDEBAR) CON MÓDULOS COMPLETOS ---
+# --- BARRA LATERAL (SIDEBAR) CON MÓDULOS DE INGESTA Y CARGA ---
 st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
-uploaded_file = st.sidebar.file_uploader("Arrastra tu Excel / CSV", type=["xlsx", "xls", "csv"])
-if uploaded_file is not None:
-    try:
-        df_temp = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_file)
-        st.sidebar.success(f"Archivo cargado correctamente: {len(df_temp)} registros detectados.")
-    except Exception as e:
-        st.sidebar.error(f"Error al leer el archivo: {e}")
+uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
+
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        try:
+            df_temp = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_file)
+            
+            # Insertar los registros del Excel directamente en la base de datos SQLite
+            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for _, row in df_temp.iterrows():
+                # Intentamos extraer columnas comunes o usar valores por defecto seguros
+                reg = str(row.get('Región', row.get('region', 'AMBA')))
+                pil = str(row.get('Pilar', row.get('pilar', 'Demand General')))
+                desc = str(row.get('Descripción', row.get('descripcion', 'Carga Masiva Excel')))
+                est = str(row.get('Estado', row.get('estado', 'PENDIENTE'))).upper()
+                
+                cursor.execute("""
+                    INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (reg, pil, desc, est, fecha_actual))
+            conn.commit()
+            st.sidebar.success(f"¡{uploaded_file.name} importado con éxito ({len(df_temp)} registros)!")
+        except Exception as e:
+            st.sidebar.error(f"Error al procesar {uploaded_file.name}: {e}")
+    if uploaded_files:
+        st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
@@ -72,7 +93,7 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
     pilar_input = st.selectbox("Contrato / Proyecto", ["Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"])
     localidad_input = st.selectbox("Localidad", ["AMBA", "Córdoba", "Rosario", "Catamarca"])
     cliente_input = st.text_input("Cliente / Sitio", placeholder="Ej: CLIENTE ARGENTINA S.A.")
-    ticket_input = st.text_input("N° de Boleta (Ej: T4-26-0000)", placeholder="T4-26-0000")
+    ticket_input = st.text_input("N° de Boleta", placeholder="T4-26-0000")
     detalle_input = st.text_area("Detalle de la Tarea", placeholder="Describa la novedad u operación...")
     estado_input = st.selectbox("Estado Inicial", ["PENDIENTE", "PROCESO", "COMPLETA", "COORDINAR", "RECOORDINADA", "CANCELADA"])
     
@@ -83,11 +104,9 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             desc_completa = f"Ticket: {ticket_input} | Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
             
-            # Control de réplica de tarea por ticket existente
+            # Alerta de réplica de tarea por ticket existente
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion LIKE ?", (f"%{ticket_input}%",))
-            replica_existe = cursor.fetchone()[0] > 0
-            
-            if replica_existe:
+            if cursor.fetchone()[0] > 0:
                 st.sidebar.warning(f"⚠️ Alerta: El ticket {ticket_input} ya registra una tarea previa (Réplica detectada).")
             
             cursor.execute("""
@@ -158,14 +177,13 @@ with tab_gestion:
         st.markdown("**Tareas Totales**")
         st.markdown(f"### {total_tareas}")
     with col4:
-        # Alertas de demora (>24h simuladas con estados pendientes/proceso)
         demoras = len(df_todas[df_todas['estado'].isin(['PENDIENTE', 'PROCESO'])]) if not df_todas.empty else 0
         st.markdown("**Alertas de Demora (>24h)**")
         st.markdown(f"### {demoras}")
 
     # Aviso de alerta visual
     if demoras > 0:
-        st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que superan las 24 horas sin cerrarse.")
+        st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que requieren revisión operativa.")
 
     st.markdown("#### 📋 Tablero Dinámico de Seguimiento")
 
@@ -180,7 +198,7 @@ with tab_gestion:
 
     st.markdown("---")
     
-    # SECCIÓN DE GRÁFICOS ANALÍTICOS (Dashboard inferior)
+    # SECCIÓN DE GRÁFICOS ANALÍTICOS
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("#### 📊 Carga por Pilar / Contrato")
@@ -200,4 +218,13 @@ with tab_gestion:
 
 with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Cobertura Operativa")
-    st.info("Visualización cartográfica y de cercanía para el despliegue de recursos en campo de Seguridad Física Fnet.")
+    st.write("Visualización cartográfica en tiempo real de los recursos y despliegues en campo.")
+    
+    # Mapa interactivo funcional con Folium centrado en Argentina
+    m = folium.Map(location=[-34.6037, -58.3816], zoom_start=6)
+    
+    # Añadir marcadores básicos de ejemplo para las regiones operativas
+    folium.Marker([-34.6037, -58.3816], popup="Base AMBA - Francisbel Salazar", tooltip="AMBA").add_to(m)
+    folium.Marker([-31.4201, -64.1888], popup="Base Córdoba - Darío Morais", tooltip="Córdoba").add_to(m)
+    
+    st_folium(m, width=1100, height=500)
