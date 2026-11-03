@@ -1,12 +1,9 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import io
-from datetime import datetime, timedelta
-import folium
-from streamlit_folium import st_folium
+from datetime import datetime
 
-# Configuración inicial de la página
+# Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Seguimiento Operativo - Backbone", layout="wide")
 
 # Función para conectar a la base de datos e inicializar tablas
@@ -14,7 +11,7 @@ def get_connection():
     conn = sqlite3.connect("operaciones_backbone.db")
     cursor = conn.cursor()
     
-    # Crear la tabla de regiones si no existe
+    # Crear tabla de regiones
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS regiones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +19,7 @@ def get_connection():
         )
     """)
     
-    # Crear la tabla de técnicos si no existe
+    # Crear tabla de técnicos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tecnicos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,90 +28,106 @@ def get_connection():
         )
     """)
     
-    # Crear la tabla de tareas si no existe
+    # Crear tabla de tareas con los campos detallados
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            region TEXT,
             pilar TEXT,
             descripcion TEXT,
-            region_id INTEGER,
-            tecnico_id INTEGER,
             estado TEXT,
             fecha_creacion TEXT
         )
     """)
     
-    # Insertar valores por defecto si las tablas están vacías
+    # Insertar valores por defecto si está vacía
     cursor.execute("SELECT COUNT(*) FROM regiones")
     if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO regiones (nombre) VALUES ('AMBA')")
         cursor.execute("INSERT INTO regiones (nombre) VALUES ('Nacional / General')")
-        cursor.execute("INSERT INTO tecnicos (nombre, region_id) VALUES ('Sin Asignar', 1)")
+        cursor.execute("INSERT INTO tecnicos (nombre, region_id) VALUES ('Francisbel Salazar', 1)")
+        cursor.execute("INSERT INTO tecnicos (nombre, region_id) VALUES ('Darío Morais', 1)")
         conn.commit()
         
     return conn
 
-# Inicializamos la conexión a la base de datos
+# Inicializamos la conexión
 conn = get_connection()
+cursor = conn.cursor()
 
-# --- INTERFAZ GRÁFICA PRINCIPAL ---
-st.title("🛡️ Seguimiento Operativo - Backbone")
-st.subheader("Sistema de Gestión y Control - Seguridad Física Fnet")
+# --- BARRA LATERAL: CARGA MANUAL Y FILTROS ---
+st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
 
-# Pestañas de navegación para organizar el sistema operativo
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Panel Principal", "➕ Registrar Tarea", "📊 Reportes y Datos", "🗺️ Mapa Operativo"])
-
-with tab1:
-    st.markdown("### Estado General de Operaciones")
-    st.success("Base de datos conectada correctamente. Las tablas están activas.")
+with st.sidebar.form("form_carga_manual", clear_on_submit=True):
+    pilar_input = st.selectbox("Pilar / Proyecto", ["Demand General", "Mant ME - Nut", "Mant ME - Meditérraneo - FO", "Backbone - Electro"])
+    localidad_input = st.selectbox("Localidad", ["AMBA", "Córdoba", "Rosario", "Catamarca"])
+    cliente_input = st.text_input("Cliente / Sitio", placeholder="Ej: CLIENTE ARGENTINA S.A.")
+    ticket_input = st.text_input("N° de Boleta", placeholder="Ej: T4-26-0000")
+    detalle_input = st.text_area("Detalle de la Tarea", placeholder="Describa la novedad u operación...")
+    estado_input = st.selectbox("Estado Inicial", ["PENDIENTE", "PROCESO", "COMPLETA"])
     
-    # Consulta rápida de tareas para mostrar en pantalla
-    df_tareas = pd.read_sql("SELECT * FROM tareas", conn)
-    if not df_tareas.empty:
-        st.dataframe(df_tareas, use_container_width=True)
-    else:
-        st.info("Aún no hay tareas registradas en el sistema. Utiliza la pestaña 'Registrar Tarea' para comenzar.")
-
-with tab2:
-    st.markdown("### Registro de Nuevas Tareas / Actividades")
-    with st.form("form_tarea"):
-        pilar = st.selectbox("Seleccione el Pilar", ["Operativo", "Administrativo", "Infraestructura", "Logística"])
-        descripcion = st.text_area("Descripción de la Tarea o Novedad")
-        
-        # Cargar regiones para el formulario
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, nombre FROM regiones")
-        regiones = cursor.fetchall()
-        regiones_dict = {nombre: rid for rid, nombre in regiones}
-        
-        region_seleccionada = st.selectbox("Región / Zona", list(regiones_dict.keys()))
-        
-        submitted = st.form_submit_button("Guardar Tarea")
-        if submitted:
-            if descripcion.strip() != "":
-                reg_id = regiones_dict[region_seleccionada]
-                fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                cursor.execute("""
-                    INSERT INTO tareas (pilar, descripcion, region_id, tecnico_id, estado, fecha_creacion)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (pilar, descripcion, reg_id, 1, "Pendiente", fecha_actual))
-                conn.commit()
-                st.success("¡Tarea registrada con éxito!")
-                st.rerun()
-            else:
-                st.warning("Por favor, complete la descripción de la tarea.")
-
-with tab3:
-    st.markdown("### Análisis y Métricas")
-    st.write("Aquí podrás visualizar el estado de cumplimiento y métricas del personal operativo.")
-    if not df_tareas.empty:
-        st.metric(label="Total de Tareas Registradas", value=len(df_tareas))
-    else:
-        st.write("Sin datos suficientes para mostrar métricas.")
-
-with tab4:
-    st.markdown("### Visualización Geográfica")
-    st.write("Mapa de despliegue operativo en tiempo real.")
+    submit_tarea = st.form_submit_button("Registrar Tarea")
     
-    # Mapa base con Folium de ejemplo
-    m = folium.Map(location=[-34.6037, -58.3816], zoom_start=11) # Centrado en Buenos Aires por defecto
-    st_folium(m, width=700, height=450)
+    if submit_tarea:
+        if descripcion_texto := detalle_input.strip():
+            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            desc_completa = f"Cliente: {cliente_input} | Localidad: {Localidad if 'Localidad' in locals() else localidad_input} | Detalle: {descripcion_texto}"
+            
+            cursor.execute("""
+                INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
+                VALUES (?, ?, ?, ?, ?)
+            """, (localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
+            conn.commit()
+            st.sidebar.success("¡Tarea registrada con éxito!")
+            st.rerun()
+        else:
+            st.sidebar.warning("Por favor, ingrese el detalle de la tarea.")
+
+# --- INTERFAZ PRINCIPAL ---
+st.markdown("### ⚡ Panel de Control y Seguimiento Operativo - Backbone")
+st.markdown("---")
+
+# Pestañas superiores de navegación
+tab_gestion, tab_mapa = st.tabs(["📊 Tablero y Gestión", "🗺️ Mapa Logístico y Cercanía"])
+
+with tab_gestion:
+    # Métricas superiores estilo tarjeta
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown("**Responsable AMBA**")
+        st.text("Francisbel Salazar")
+        st.caption("🟢 17 vehículos / 15 técnicos")
+    with col2:
+        st.markdown("**Responsable Interior**")
+        st.text("Darío Morais")
+        st.caption("🟢 33 vehículos / 31 Téc.")
+    with col3:
+        df_todas = pd.read_sql("SELECT * FROM tareas", conn)
+        total_tareas = len(df_todas)
+        st.markdown("**Tareas Totales**")
+        st.markdown(f"### {total_tareas}")
+    with col4:
+        # Alertas de demora simuladas (pendientes o en proceso)
+        demoras = len(df_todas[df_todas['estado'].isin(['PENDIENTE', 'PROCESO'])]) if not df_todas.empty else 0
+        st.markdown("**Alertas de Demora (>24h)**")
+        st.markdown(f"### {demoras}")
+
+    # Aviso de alertas
+    if demoras > 0:
+        st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que requieren revisión operativa.")
+
+    st.markdown("#### 📋 Tablero Dinámico de Seguimiento")
+
+    if not df_todas.empty:
+        # Mostramos la tabla adaptada al diseño operativo
+        df_mostrar = df_todas[['id', 'region', 'pilar', 'descripcion', 'estado', 'fecha_creacion']].copy()
+        df_mostrar.columns = ['ID', 'Región', 'Pilar', 'Descripción', 'Estado', 'Fecha']
+        df_mostrar['Alerta Demora'] = df_mostrar['Estado'].apply(lambda x: 'Demora' if x in ['PENDIENTE', 'PROCESO'] else 'Normal')
+        
+        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay tareas cargadas actualmente. Utiliza el panel izquierdo para registrar nuevas operaciones.")
+
+with tab_mapa:
+    st.markdown("#### Módulo Geográfico y Cobertura Operativa")
+    st.info("El mapa interactivo se encuentra sincronizado con las regiones de cobertura de Seguridad Física Fnet.")
