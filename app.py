@@ -320,15 +320,12 @@ with tab_gestion:
             st.info("Sin datos para graficar con el filtro seleccionado.")
 
 with tab_mapa:
-    st.markdown("#### 🗺️ Módulo Geográfico y Cobertura Operativa")
-    st.write("Visualización cartográfica nacional en tiempo real (Centro, Norte y Patagonia).")
+    st.markdown("#### 🗺️ Módulo Geográfico y Estatus por Localidad")
+    st.write("Visualización a nivel nacional: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
     
-    # Mapa centrado geográficamente en el centro de Argentina con zoom óptimo nacional
     m = folium.Map(location=[-40.0, -64.0], zoom_start=4)
     
-    # 🇦🇷 Diccionario ampliado con cobertura nacional completa (Norte, Centro y Patagonia / Sur)
     coordenadas_regiones = {
-        # AMBA y Buenos Aires
         'AMBA': [-34.6037, -58.3816],
         'BUENOS AIRES': [-34.6037, -58.3816],
         'LA PLATA': [-34.9214, -57.9545],
@@ -337,8 +334,6 @@ with tab_mapa:
         'TANDIL': [-37.3217, -59.1332],
         'ZARATE': [-34.1025, -59.0305],
         'PERGAMINO': [-33.8894, -60.5739],
-        
-        # Centro y Litoral
         'CORDOBA': [-31.4201, -64.1888],
         'ROSARIO': [-32.9468, -60.6393],
         'SANTA FE': [-31.6333, -60.7000],
@@ -348,8 +343,6 @@ with tab_mapa:
         'RESISTENCIA': [-27.4511, -58.9866],
         'MISIONES': [-27.3671, -55.8961],
         'POSADAS': [-27.3671, -55.8961],
-        
-        # Cuyo y Noroeste (NOA)
         'MENDOZA': [-32.8894, -68.8458],
         'SAN JUAN': [-31.5375, -68.5364],
         'SAN LUIS': [-33.3017, -66.3378],
@@ -360,8 +353,6 @@ with tab_mapa:
         'SANTIAGO DEL ESTERO': [-27.7833, -64.2667],
         'CATAMARCA': [-28.4696, -65.7795],
         'LA RIOJA': [-29.4131, -66.8558],
-        
-        # Patagonia y Sur (¡Ampliación clave!)
         'NEUQUEN': [-38.9516, -68.0591],
         'RIO NEGRO': [-40.8135, -63.0049],
         'VIEDMA': [-40.8135, -63.0049],
@@ -383,26 +374,83 @@ with tab_mapa:
         'RIO GRANDE': [-53.7876, -67.7025]
     }
     
-    df_mapa_data = pd.read_sql("SELECT DISTINCT region, ticket, pilar, descripcion FROM tareas", conn)
+    # Obtenemos todas las tareas agrupadas/evaluadas por región para determinar el estado general del lugar
+    df_mapa_raw = pd.read_sql("SELECT ticket, region, pilar, estado, fecha_creacion, fecha_cierre FROM tareas", conn)
     
-    if not df_mapa_data.empty:
-        for _, row in df_mapa_data.iterrows():
-            reg_key = str(row['region']).strip().upper()
-            coords = [-34.6037, -58.3816] # Default AMBA si no encuentra coincidencia
-            
-            # Buscar coincidencia exacta o parcial en el diccionario nacional
+    if not df_mapa_data_empty := df_mapa_raw.empty:
+        # Agrupar por región para definir el estatus general del sitio
+        regiones_uniques = df_mapa_raw['region'].dropna().unique()
+        
+        for reg in regiones_uniques:
+            reg_key = str(reg).strip().upper()
+            coords = [-34.6037, -58.3816] # Default AMBA
             for key, val in coordenadas_regiones.items():
                 if key in reg_key:
                     coords = val
                     break
             
-            popup_text = f"<b>Ticket:</b> {row['ticket']}<br><b>Región:</b> {row['region']}<br><b>Pilar:</b> {row['pilar']}"
+            # Tareas de esta región específica
+            df_reg_tareas = df_mapa_raw[df_mapa_raw['region'] == reg]
+            
+            # --- EVALUACIÓN DE JERARQUÍA DE ESTADO DEL LUGAR ---
+            color_marcador = 'blue'
+            icon_marcador = 'info-sign'
+            estado_sitio = "ACTIVO / RUTINA"
+            
+            tiene_alerta = False
+            tiene_pendiente = False
+            reciente_completa = False
+            
+            for _, t_row in df_reg_tareas.iterrows():
+                est = str(t_row['estado']).upper()
+                if est in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
+                    # Verificar si supera las 24h (Alerta SLA)
+                    try:
+                        f_cr = datetime.strptime(str(t_row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
+                        if (datetime.now() - f_cr) > timedelta(hours=24):
+                            tiene_alerta = True
+                        else:
+                            tiene_pendiente = True
+                    except:
+                        tiene_pendiente = True
+                elif est == 'COMPLETA':
+                    # Verificar si fue completada hace menos de 15 días
+                    f_cierre_str = str(t_row['fecha_cierre']) if pd.notna(t_row['fecha_cierre']) and t_row['fecha_cierre'] != '' else str(t_row['fecha_creacion'])
+                    try:
+                        f_cie = datetime.strptime(f_cierre_str, "%Y-%m-%d %H:%M:%S")
+                        if (datetime.now() - f_cie) <= timedelta(days=15):
+                            reciente_completa = True
+                    except:
+                        pass
+
+            # Prioridad de colores: ROJO (Alerta) > AMARILLO/AZUL (Pendiente nuevo) > VERDE (Completa <15 días) > AZUL (Normal/Inactivo)
+            if tiene_alerta:
+                color_marcador = 'red'
+                icon_marcador = 'warning-sign'
+                estado_sitio = "🔴 ALERTA SLA (>24h sin resolver)"
+            elif tiene_pendiente:
+                color_marcador = 'blue'
+                icon_marcador = 'time'
+                estado_sitio = "⏳ PENDIENTE / EN PROCESO"
+            elif reciente_completa:
+                color_marcador = 'green'
+                icon_marcador = 'ok-sign'
+                estado_sitio = "🟢 COMPLETADO RECIENTE (<15 días)"
+            else:
+                color_marcador = 'blue'
+                icon_marcador = 'ok'
+                estado_sitio = "🔵 SIN CASOS ACTIVOS (>15 días de cerrado)"
+
+            # Armar resumen de tickets activos o recientes para el popup
+            tickets_str = ", ".join(df_reg_tareas['ticket'].astype(str).unique())
+            popup_text = f"<b>Región:</b> {reg}<br><b>Estatus Lugar:</b> {estado_sitio}<br><b>Tickets:</b> {tickets_str}"
             popup_popup = folium.Popup(popup_text, max_width=300)
             
             folium.Marker(
                 location=coords,
                 popup=popup_popup,
-                tooltip=f"Región: {row['region']} (Ticket: {row['ticket']})"
+                tooltip=f"Lugar: {reg} [{estado_sitio}]",
+                icon=folium.Icon(color=color_marcador, icon=icon_marcador, prefix='glyphicon')
             ).add_to(m)
             
     st_folium(m, width=1100, height=550)
