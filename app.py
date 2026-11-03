@@ -31,11 +31,14 @@ def get_connection():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket TEXT,
             region TEXT,
             pilar TEXT,
             descripcion TEXT,
             estado TEXT,
-            fecha_creacion TEXT
+            fecha_creacion TEXT,
+            fecha_cierre TEXT,
+            nota_cierre TEXT
         )
     """)
     
@@ -57,61 +60,55 @@ st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.sidebar.button("⚙️ Procesar e Importar (Sin Duplicados)"):
+    if st.sidebar.button("⚙️ Procesar por Ticket (Sin Duplicados)"):
         total_nuevos = 0
         total_duplicados = 0
         
         for uploaded_file in uploaded_files:
             try:
                 df_temp = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_file)
-                
-                # Normalizar nombres de columnas a minúsculas para lectura flexible
                 df_temp.columns = [str(c).strip().lower() for c in df_temp.columns]
                 
                 for _, row in df_temp.iterrows():
-                    # Extraer región / localidad de forma flexible
+                    # Extraer número de ticket único
+                    ticket_val = str(row.get('ticket', row.get('n° de boleta', row.get('boleta', row.get('caso', 'S/N'))))).strip()
                     reg = str(row.get('región', row.get('region', row.get('zona', row.get('localidad', 'AMBA')))))
                     pil = str(row.get('pilar', row.get('contrato', row.get('proyecto', 'Demand General'))))
                     
-                    # Construir descripción detallada uniendo todas las columnas del Excel
                     partes_desc = []
                     for col in df_temp.columns:
                         val = row.get(col)
-                        if pd.notna(val) and col not in ['región', 'region', 'zona', 'localidad', 'pilar', 'contrato', 'proyecto', 'estado', 'status', 'fecha', 'fecha_creacion', 'date']:
+                        if pd.notna(val) and col not in ['ticket', 'n° de boleta', 'boleta', 'caso', 'región', 'region', 'zona', 'localidad', 'pilar', 'contrato', 'proyecto', 'estado', 'status', 'fecha', 'fecha_creacion']:
                             partes_desc.append(f"{col.capitalize()}: {val}")
                     
                     desc = " | ".join(partes_desc) if partes_desc else str(row.to_dict())
+                    est = str(row.get('estado', row.get('status', 'PENDIENTE'))).upper()
+                    fecha_raw = row.get('fecha', row.get('fecha_creacion', None))
+                    fecha_creacion = str(fecha_raw) if pd.notna(fecha_raw) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # Extraer estado real del Excel
-                    est_raw = row.get('estado', row.get('status', 'PENDIENTE'))
-                    est = str(est_raw).upper() if pd.notna(est_raw) else 'PENDIENTE'
-                    
-                    # Extraer fecha real del Excel si existe, sino usar la actual
-                    fecha_raw = row.get('fecha', row.get('fecha_creacion', row.get('date', None)))
-                    if pd.notna(fecha_raw):
-                        fecha_creacion = str(fecha_raw)
+                    # 🛡️ NORMA TÉCNICA: Control de unicidad estricto por N° de Ticket
+                    if ticket_val != 'S/N' and ticket_val != '':
+                        cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_val,))
+                        existe = cursor.fetchone()[0] > 0
                     else:
-                        fecha_creacion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # 🛡️ Validación anti-duplicados estricta basada en el contenido completo
-                    cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ? AND region = ?", (desc, reg))
-                    existe = cursor.fetchone()[0] > 0
+                        cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc,))
+                        existe = cursor.fetchone()[0] > 0
                     
                     if not existe:
                         cursor.execute("""
-                            INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (reg, pil, desc, est, fecha_creacion))
+                            INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
+                            VALUES (?, ?, ?, ?, ?, ?, '', '')
+                        """, (ticket_val, reg, pil, desc, est, fecha_creacion))
                         total_nuevos += 1
                     else:
                         total_duplicados += 1
                         
                 conn.commit()
-                st.sidebar.success(f"Archivo {uploaded_file.name}: {total_nuevos} importados, {total_duplicados} duplicados omitidos.")
+                st.sidebar.success(f"Archivo {uploaded_file.name}: {total_nuevos} nuevos, {total_duplicados} duplicados por ticket omitidos.")
             except Exception as e:
                 st.sidebar.error(f"Error procesando {uploaded_file.name}: {e}")
                 
-        st.sidebar.success(f"¡Proceso completado! Total de registros nuevos: {total_nuevos}.")
+        st.sidebar.success(f"¡Proceso completado! Total de casos nuevos incorporados: {total_nuevos}.")
 
 if st.sidebar.button("🗑️ Limpiar Base de Datos (Reiniciar a Cero)"):
     cursor.execute("DELETE FROM tareas")
@@ -126,7 +123,7 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
     pilar_input = st.selectbox("Contrato / Proyecto", ["Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"])
     localidad_input = st.selectbox("Localidad", ["AMBA", "Córdoba", "Rosario", "Catamarca"])
     cliente_input = st.text_input("Cliente / Sitio", placeholder="Ej: CLIENTE ARGENTINA S.A.")
-    ticket_input = st.text_input("N° de Boleta", placeholder="T4-26-0000")
+    ticket_input = st.text_input("N° de Boleta / Ticket", placeholder="T4-26-0000")
     detalle_input = st.text_area("Detalle de la Tarea", placeholder="Describa la novedad u operación...")
     estado_input = st.selectbox("Estado Inicial", ["PENDIENTE", "PROCESO", "COMPLETA", "COORDINAR", "RECOORDINADA", "CANCELADA"])
     
@@ -135,20 +132,46 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
     if submit_tarea:
         if detalle_input.strip() and ticket_input.strip():
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            desc_completa = f"Ticket: {ticket_input} | Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
+            desc_completa = f"Cliente: {cliente_input} | Detalle: {detalle_input.strip()}"
             
-            cursor.execute("SELECT COUNT(*) FROM tareas WHERE descripcion = ?", (desc_completa,))
+            # Validación por Ticket
+            cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_input.strip(),))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.warning("⚠️ Este ticket y detalle ya existen en el sistema.")
+                st.sidebar.warning(f"⚠️ El Ticket '{ticket_input}' ya se encuentra registrado en el sistema.")
             else:
                 cursor.execute("""
-                    INSERT INTO tareas (region, pilar, descripcion, estado, fecha_creacion)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
+                    INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
+                    VALUES (?, ?, ?, ?, ?, ?, '', '')
+                """, (ticket_input.strip(), localidad_input, pilar_input, desc_completa, estado_input, fecha_actual))
                 conn.commit()
                 st.sidebar.success("¡Operación registrada con éxito!")
         else:
-            st.sidebar.warning("Por favor, complete el N° de boleta y el detalle.")
+            st.sidebar.warning("Por favor, complete el N° de boleta/ticket y el detalle.")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛠️ Cierre Manual y Auditoría (Jefe de Operaciones)")
+df_pendientes_edicion = pd.read_sql("SELECT id, ticket, pilar, estado FROM tareas WHERE estado != 'COMPLETA'", conn)
+
+if not df_pendientes_edicion.empty:
+    tarea_opciones = {f"ID #{row['id']} - Ticket: {row['ticket']} ({row['pilar']})": row['id'] for _, row in df_pendientes_edicion.iterrows()}
+    seleccion_key = st.sidebar.selectbox("Seleccionar Caso Pendiente", list(tarea_opciones.keys()))
+    id_objetivo = tarea_opciones[seleccion_key]
+    
+    nuevo_estado_jefe = st.sidebar.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA"], key="est_jefe")
+    nota_justificacion = st.sidebar.text_area("Nota / Justificación Operativa (Obligatorio si hay fuera de fecha)", placeholder="Motivo del cierre manual...")
+    
+    if st.sidebar.button("Aplicar Cierre / Modificación"):
+        fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            UPDATE tareas 
+            SET estado = ?, fecha_cierre = ?, nota_cierre = ?
+            WHERE id = ?
+        """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, id_objetivo))
+        conn.commit()
+        st.sidebar.success(f"¡Caso #{id_objetivo} actualizado correctamente con fecha {fecha_correccion}!")
+        st.rerun()
+else:
+    st.sidebar.caption("No hay casos pendientes para cierre manual.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔍 Filtros de Visualización")
@@ -178,7 +201,7 @@ with tab_gestion:
     df_todas = pd.read_sql(query_base, conn, params=params)
     total_tareas = len(df_todas)
     
-    # Cálculo real de demoras (>24 horas desde la fecha de creación)
+    # Cálculo de demoras (>24h y sin cierre manual)
     demoras = 0
     ahora = datetime.now()
     if not df_todas.empty:
@@ -208,26 +231,26 @@ with tab_gestion:
         st.markdown(f"### {demoras}")
 
     if demoras > 0:
-        st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que superan las 24 horas sin cerrarse.")
+        st.warning(f"⚠️ Atención: Hay {demoras} tareas pendientes o en curso que superan las 24 horas de SLA sin cerrarse.")
 
     st.markdown("#### 📋 Tablero Dinámico de Seguimiento")
 
     if not df_todas.empty:
-        df_mostrar = df_todas[['id', 'region', 'pilar', 'descripcion', 'estado', 'fecha_creacion']].copy()
-        df_mostrar.columns = ['ID', 'Región', 'Pilar', 'Descripción', 'Estado', 'Fecha']
+        df_mostrar = df_todas[['id', 'ticket', 'region', 'pilar', 'descripcion', 'estado', 'fecha_creacion', 'fecha_cierre', 'nota_cierre']].copy()
+        df_mostrar.columns = ['ID', 'Ticket', 'Región', 'Pilar', 'Descripción', 'Estado', 'Creación', 'Cierre Manual', 'Nota Auditoría']
         
         def evaluar_demora(row):
             if str(row['Estado']).upper() in ['COMPLETA', 'CANCELADA']:
-                return 'Normal'
+                return 'Normal (Cerrado)'
             try:
-                f_creacion = datetime.strptime(str(row['Fecha']), "%Y-%m-%d %H:%M:%S")
+                f_creacion = datetime.strptime(str(row['Creación']), "%Y-%m-%d %H:%M:%S")
                 if (datetime.now() - f_creacion) > timedelta(hours=24):
-                    return 'Demora (>24h)'
+                    return 'Demora SLA (>24h)'
             except:
                 pass
             return 'En Tiempo'
 
-        df_mostrar['Alerta Demora'] = df_mostrar.apply(evaluar_demora, axis=1)
+        df_mostrar['Alerta SLA'] = df_mostrar.apply(evaluar_demora, axis=1)
         
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
     else:
