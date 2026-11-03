@@ -8,13 +8,15 @@ from streamlit_folium import st_folium
 # Configuración inicial de la página en modo ancho
 st.set_page_config(page_title="Panel de Control y Seguimiento Operativo - Backbone", layout="wide")
 
-# 🎨 ESTILOS CSS: Ocultar menús nativos y widgets de Streamlit
+# 🎨 ESTILOS CSS AVANZADOS: Ocultar menús nativos, pie de página y la barra flotante de gestión de Streamlit
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stStatusWidget {visibility: hidden;}
     header {visibility: hidden;}
+    [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
+    .viewerBadge_container__1QSob {visibility: hidden; display: none;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -66,7 +68,12 @@ def get_connection():
 conn = get_connection()
 cursor = conn.cursor()
 
-# --- BARRA LATERAL (SIDEBAR: INGESTA Y CIERRE MANUAL POR BÚSQUEDA) ---
+# --- BARRA LATERAL (SIDEBAR: INGESTA, BÚSQUEDA Y BOTÓN DE REFRESCO) ---
+st.sidebar.markdown("### 🔄 Control de Pantalla")
+if st.sidebar.button("🔄 Actualizar / Refrescar Panel"):
+    st.rerun()
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
@@ -153,18 +160,15 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠️ Cierre Manual y Búsqueda (Jefe Ops)")
 
-# 🔍 NUEVO: Consola de búsqueda rápida por N° de Ticket o ID
 ticket_buscado = st.sidebar.text_input("Buscar Ticket / Boleta", placeholder="Ej: TA-26-37457 o INC...")
 
 if ticket_buscado.strip():
-    # Buscar coincidencia exacta o parcial del ticket
     query_busqueda = "SELECT id, ticket, region, pilar, estado, fecha_creacion FROM tareas WHERE ticket LIKE ?"
     df_encontrado = pd.read_sql(query_busqueda, conn, params=(f"%{ticket_buscado.strip()}%",))
     
     if not df_encontrado.empty:
         st.sidebar.success(f"¡Se encontraron {len(df_encontrado)} caso(s)!")
         
-        # Formulario interactivo para el caso encontrado
         for _, row_caso in df_encontrado.iterrows():
             st.sidebar.markdown(f"**ID #{row_caso['id']} | Ticket: {row_caso['ticket']}**")
             st.sidebar.caption(f"Región: {row_caso['region']} | Estado Actual: {row_caso['estado']}")
@@ -179,9 +183,9 @@ if ticket_buscado.strip():
                     fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     cursor.execute("""
                         UPDATE tareas 
-                        st SET estado = ?, fecha_cierre = ?, nota_cierre = ?
+                        SET estado = ?, fecha_cierre = ?, nota_cierre = ?
                         WHERE id = ?
-                    """.replace("st ", ""), (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
+                    """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
                     conn.commit()
                     st.toast(f"¡Caso #{row_caso['id']} actualizado correctamente!", icon="🔒")
                     st.rerun()
@@ -232,7 +236,7 @@ with tab_gestion:
     df_todas = pd.read_sql(query_base, conn, params=params)
     total_tareas = len(df_todas)
     
-    # 🕒 CÁLCULO UNIFICADO DE DEMORAS (>24h y activo)
+    # Cálculo unificado de demoras (>24h y activo)
     demoras = 0
     ahora = datetime.now()
     if not df_todas.empty:
@@ -339,7 +343,7 @@ with tab_gestion:
 
 with tab_mapa:
     st.markdown("#### 🗺️ Módulo Geográfico y Estatus por Localidad")
-    st.write("Visualización a nivel nacional con la misma regla exacta del tablero: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
+    st.write("Visualización a nivel nacional con la regla exacta: 🔴 Alerta SLA (>24h) | 🟢 Completa (<15 días) | 🔵 Activo / Rutina.")
     
     m = folium.Map(location=[-40.0, -64.0], zoom_start=4)
     
