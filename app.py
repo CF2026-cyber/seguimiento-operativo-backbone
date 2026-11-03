@@ -66,7 +66,7 @@ def get_connection():
 conn = get_connection()
 cursor = conn.cursor()
 
-# --- BARRA LATERAL (SIDEBAR LIMPIA) ---
+# --- BARRA LATERAL (SIDEBAR: INGESTA Y CIERRE MANUAL POR BÚSQUEDA) ---
 st.sidebar.markdown("### 📁 Ingesta Masiva (Excel)")
 uploaded_files = st.sidebar.file_uploader("Arrastra tus archivos Excel / CSV", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
 
@@ -151,27 +151,45 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             st.sidebar.warning("Complete el ticket y detalle.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Cierre Manual (Jefe Ops)")
-df_pendientes_edicion = pd.read_sql("SELECT id, ticket, pilar, estado FROM tareas WHERE estado != 'COMPLETA'", conn)
+st.sidebar.markdown("### 🛠️ Cierre Manual y Búsqueda (Jefe Ops)")
 
-if not df_pendientes_edicion.empty:
-    tarea_opciones = {f"ID #{row['id']} - Ticket: {row['ticket']} ({row['pilar']})": row['id'] for _, row in df_pendientes_edicion.iterrows()}
-    seleccion_key = st.sidebar.selectbox("Seleccionar Caso Pendiente", list(tarea_opciones.keys()))
-    id_objetivo = tarea_opciones[seleccion_key]
+# 🔍 NUEVO: Consola de búsqueda rápida por N° de Ticket o ID
+ticket_buscado = st.sidebar.text_input("Buscar Ticket / Boleta", placeholder="Ej: TA-26-37457 o INC...")
+
+if ticket_buscado.strip():
+    # Buscar coincidencia exacta o parcial del ticket
+    query_busqueda = "SELECT id, ticket, region, pilar, estado, fecha_creacion FROM tareas WHERE ticket LIKE ?"
+    df_encontrado = pd.read_sql(query_busqueda, conn, params=(f"%{ticket_buscado.strip()}%",))
     
-    nuevo_estado_jefe = st.sidebar.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA"], key="est_jefe")
-    nota_justificacion = st.sidebar.text_area("Nota / Justificación (Obligatoria si hay atraso)", placeholder="Motivo de corrección...")
-    
-    if st.sidebar.button("Aplicar Cierre Manual"):
-        fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-            UPDATE tareas 
-            SET estado = ?, fecha_cierre = ?, nota_cierre = ?
-            WHERE id = ?
-        """, (nuevo_estado_jefe, fecha_correccion, nota_justificacion, id_objetivo))
-        conn.commit()
-        st.toast(f"¡Caso #{id_objetivo} actualizado!", icon="🔒")
-        st.rerun()
+    if not df_encontrado.empty:
+        st.sidebar.success(f"¡Se encontraron {len(df_encontrado)} caso(s)!")
+        
+        # Formulario interactivo para el caso encontrado
+        for _, row_caso in df_encontrado.iterrows():
+            st.sidebar.markdown(f"**ID #{row_caso['id']} | Ticket: {row_caso['ticket']}**")
+            st.sidebar.caption(f"Región: {row_caso['region']} | Estado Actual: {row_caso['estado']}")
+            
+            with st.sidebar.form(f"form_cierre_{row_caso['id']}"):
+                nuevo_estado_jefe = st.selectbox("Modificar Estado", ["COMPLETA", "PROCESO", "COORDINAR", "CANCELADA", "PENDIENTE"], index=0, key=f"est_{row_caso['id']}")
+                nota_justificacion = st.text_area("Nota / Justificación (Auditoría)", placeholder="Motivo de corrección o cierre fuera de término...", key=f"nota_{row_caso['id']}")
+                
+                btn_aplicar = st.form_submit_button("Aplicar Modificación")
+                
+                if btn_aplicar:
+                    fecha_correccion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("""
+                        UPDATE tareas 
+                        st SET estado = ?, fecha_cierre = ?, nota_cierre = ?
+                        WHERE id = ?
+                    """.replace("st ", ""), (nuevo_estado_jefe, fecha_correccion, nota_justificacion, row_caso['id']))
+                    conn.commit()
+                    st.toast(f"¡Caso #{row_caso['id']} actualizado correctamente!", icon="🔒")
+                    st.rerun()
+            st.sidebar.markdown("---")
+    else:
+        st.sidebar.warning("No se encontró ningún caso con ese N° de Ticket.")
+else:
+    st.sidebar.caption("💡 Pegue o escriba un N° de Ticket (ej: TA-26-...) para buscarlo y gestionarlo.")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🗑️ Limpiar Base de Datos (Cero)"):
@@ -274,7 +292,7 @@ with tab_gestion:
     st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # --- DASHBOARD ANALÍTICO MEJORADO ---
+    # --- DASHBOARD ANALÍTICO ---
     st.markdown("#### 📊 Dashboard y Métricas Analíticas")
     
     dash_filtro = st.radio(
@@ -399,13 +417,11 @@ with tab_mapa:
             tiene_pendiente = False
             reciente_completa = False
             
-            # --- EVALUACIÓN EXACTA Y COMPARTIDA CON EL TABLERO ---
             for _, t_row in df_reg_tareas.iterrows():
                 est = str(t_row['estado']).upper()
                 if est in ['PENDIENTE', 'PROCESO', 'COORDINAR']:
                     try:
                         f_cr = datetime.strptime(str(t_row['fecha_creacion']), "%Y-%m-%d %H:%M:%S")
-                        # Muestra alerta si supera estrictamente 24h
                         if (datetime.now() - f_cr) > timedelta(hours=24):
                             tiene_alerta = True
                         else:
@@ -421,7 +437,6 @@ with tab_mapa:
                     except:
                         pass
 
-            # Jerarquía estricta: Si hay aunque sea UNA tarea con alerta en la región, el sitio se pinta de ROJO
             if tiene_alerta:
                 color_marcador = 'red'
                 icon_marcador = 'warning-sign'
