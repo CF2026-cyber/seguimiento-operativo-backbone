@@ -23,7 +23,7 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# Función para conectar a la base de datos e inicializar tablas y usuarios
+# Función para conectar a la base de datos, inicializar tablas y asegurar migración de columnas
 def get_connection():
     conn = sqlite3.connect("operaciones_backbone.db")
     cursor = conn.cursor()
@@ -43,6 +43,7 @@ def get_connection():
         )
     """)
     
+    # 📋 Crear tabla tareas si no existe
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,6 +57,29 @@ def get_connection():
             nota_cierre TEXT
         )
     """)
+    
+    # 🔄 AUTO-MIGRACIÓN: Verificar si faltan columnas en tablas antiguas y agregarlas automáticamente
+    cursor.execute("PRAGMA table_info(tareas)")
+    columnas_existentes = [col[1] for col in cursor.fetchall()]
+    
+    columnas_necesarias = {
+        'ticket': 'TEXT',
+        'region': 'TEXT',
+        'pilar': 'TEXT',
+        'descripcion': 'TEXT',
+        'estado': 'TEXT',
+        'fecha_creacion': 'TEXT',
+        'fecha_cierre': 'TEXT',
+        'nota_cierre': 'TEXT'
+    }
+    
+    for col_nombre, col_tipo in columnas_necesarias.items():
+        if col_nombre not in columnas_existentes:
+            try:
+                cursor.execute(f"ALTER TABLE tareas ADD COLUMN {col_nombre} {col_tipo}")
+            except:
+                pass
+    conn.commit()
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
@@ -139,10 +163,10 @@ st.sidebar.markdown("### 🔄 Control de Pantalla")
 if st.sidebar.button("🔄 Actualizar / Refrescar Panel"):
     st.rerun()
 
-# --- CARGA DE TAREAS DESDE IMAGEN (CORREO / MENSAJE) CON ALERTA CLARA ---
+# --- CARGA AVANZADA DE TAREAS DESDE IMAGEN (SOPORTE DE TABLAS Y MENSAJES) ---
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📸 Carga por Imagen (Correo / Mensaje)")
-img_file = st.sidebar.file_uploader("Sube captura (WhatsApp / Email)", type=["png", "jpg", "jpeg"])
+st.sidebar.markdown("### 📸 Carga por Imagen (Tabla / Correo / Mensaje)")
+img_file = st.sidebar.file_uploader("Sube captura de tabla o mensaje", type=["png", "jpg", "jpeg"])
 
 if img_file:
     img = Image.open(img_file)
@@ -151,34 +175,52 @@ if img_file:
     pilar_img = st.sidebar.selectbox("Contrato / Pilar (Imagen)", ["Demand General", "Mant ME - Nut", "Mant ME - Mediterráneo - FO", "Backbone - Electro"], key="p_img")
     localidad_img = st.sidebar.selectbox("Localidad (Imagen)", ["AMBA", "Córdoba", "Rosario", "Catamarca", "Neuquén", "Bariloche", "Comodoro Rivadavia"], key="l_img")
     
-    if st.sidebar.button("🔍 Procesar Imagen y Registrar"):
+    if st.sidebar.button("🔍 Procesar Imagen Línea por Línea"):
         try:
             texto_extraido = pytesseract.image_to_string(img)
+            lineas = texto_extraido.split('\n')
             
-            # Buscar patrones habituales de tickets
-            match_ticket = re.search(r'(TA-\d+-\d+|INC\d+)', texto_extraido, re.IGNORECASE)
-            ticket_detectado = match_ticket.group(1).upper() if match_ticket else f"IMG-{datetime.now().strftime('%m%d%H%M%S')}"
+            nuevos_cargados = 0
+            duplicados_omitidos = 0
+            tickets_procesados = []
             
-            desc_limpia = " ".join(texto_extraido.split()).strip()
-            if not desc_limpia:
-                desc_limpia = "Carga por demanda desde captura de mensaje/correo"
-                
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 🛡️ VALIDACIÓN ESTRICTA Y ALERTA VISIBLE DE DUPLICADOS
-            cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_detectado,))
-            existe = cursor.fetchone()[0] > 0
+            for linea in lineas:
+                linea_limpia = linea.strip()
+                if not linea_limpia:
+                    continue
+                
+                tokens = re.findall(r'([A-Z0-9\-]{5,})', linea_limpia)
+                
+                if tokens:
+                    ticket_candidato = tokens[0]
+                    if ticket_candidato in ['PILAR', 'LOCALIDAD', 'ESTADO', 'FECHA', 'TICKET']:
+                        continue
+                        
+                    cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_candidato,))
+                    existe = cursor.fetchone()[0] > 0
+                    
+                    if not existe:
+                        cursor.execute("""
+                            INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
+                            VALUES (?, ?, ?, ?, 'PENDIENTE', ?, '', '')
+                        """, (ticket_candidato, localidad_img, pilar_img, f"OCR Tabla: {linea_limpia[:200]}", fecha_actual))
+                        conn.commit()
+                        nuevos_cargados += 1
+                        tickets_procesados.append(ticket_candidato)
+                    else:
+                        duplicados_omitidos += 1
             
-            if existe:
-                st.sidebar.error(f"⚠️ ¡ATENCIÓN! El Ticket '{ticket_detectado}' ya se encuentra registrado en el sistema. No se duplicó.")
+            if nuevos_cargados > 0:
+                st.sidebar.success(f"✅ ¡Éxito! Se registraron {nuevos_cargados} ticket(s) nuevo(s): {', '.join(tickets_procesados[:5])}...")
+            if duplicados_omitidos > 0:
+                st.sidebar.warning(f"⚠️ Se omitieron {duplicados_omitidos} ticket(s) por estar ya duplicados.")
+            if nuevos_cargados == 0 and duplicados_omitidos == 0:
+                st.sidebar.error("❌ No se pudieron detectar tickets válidos en la imagen.")
             else:
-                cursor.execute("""
-                    INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
-                    VALUES (?, ?, ?, ?, 'PENDIENTE', ?, '', '')
-                """, (ticket_detectado, localidad_img, pilar_img, f"OCR Text: {desc_limpia[:300]}", fecha_actual))
-                conn.commit()
-                st.sidebar.success(f"✅ ¡Éxito! Tarea nueva '{ticket_detectado}' registrada correctamente.")
-                st.toast(f"¡Tarea {ticket_detectado} registrada con éxito!", icon="📸")
+                st.toast("¡Proceso de imagen finalizado!", icon="📸")
+                
         except Exception as e:
             st.sidebar.error(f"Error procesando la imagen con OCR: {e}")
 
@@ -190,7 +232,6 @@ if uploaded_files:
     if st.sidebar.button("⚙️ Procesar por Ticket (Sin Duplicados)"):
         total_nuevos = 0
         total_duplicados = 0
-        tickets_duplicados_lista = []
         
         for uploaded_file in uploaded_files:
             try:
@@ -228,17 +269,15 @@ if uploaded_files:
                         total_nuevos += 1
                     else:
                         total_duplicados += 1
-                        if ticket_val != 'S/N':
-                            tickets_duplicados_lista.append(ticket_val)
                         
                 conn.commit()
                 st.sidebar.success(f"📊 Archivo {uploaded_file.name}: {total_nuevos} nuevos incorporados.")
                 if total_duplicados > 0:
-                    st.sidebar.warning(f"⚠️ Se omitieron {total_duplicados} registros por estar duplicados (ya existían en la base).")
+                    st.sidebar.warning(f"⚠️ Se omitieron {total_duplicados} registros por estar duplicados.")
             except Exception as e:
                 st.sidebar.error(f"❌ Error en {uploaded_file.name}: {e}")
                 
-        st.success(f"¡Proceso de ingesta finalizado! Nuevos: {total_nuevos} | Omitidos por duplicidad: {total_duplicados}.")
+        st.success(f"¡Proceso finalizado! Nuevos: {total_nuevos} | Omitidos: {total_duplicados}.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Carga Manual Inmediata")
@@ -260,7 +299,7 @@ with st.sidebar.form("form_carga_manual", clear_on_submit=True):
             
             cursor.execute("SELECT COUNT(*) FROM tareas WHERE ticket = ?", (ticket_input.strip(),))
             if cursor.fetchone()[0] > 0:
-                st.sidebar.error(f"⚠️ ¡ATENCIÓN! El Ticket '{ticket_input.strip()}' ya existe en el sistema. No se puede duplicar.")
+                st.sidebar.error(f"⚠️ ¡ATENCIÓN! El Ticket '{ticket_input.strip()}' ya existe en el sistema.")
             else:
                 cursor.execute("""
                     INSERT INTO tareas (ticket, region, pilar, descripcion, estado, fecha_creacion, fecha_cierre, nota_cierre)
@@ -407,7 +446,18 @@ with tab_gestion:
 
         df_mostrar['Alerta SLA'] = df_mostrar.apply(evaluar_demora, axis=1)
         
-        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_mostrar,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Alerta SLA": st.column_config.TextColumn(
+                    "Alerta SLA",
+                    help="Estado del cumplimiento del SLA operativo",
+                    width="medium"
+                )
+            }
+        )
     else:
         st.info("No hay tareas registradas con los filtros seleccionados.")
 
@@ -447,6 +497,7 @@ with tab_gestion:
         st.markdown("##### 📊 Carga por Pilar / Contrato")
         if not df_dash.empty:
             conteo_pilar = df_dash['pilar'].value_counts()
+            conteo_pilar.name = "Cantidad"
             st.bar_chart(conteo_pilar)
         else:
             st.info("Sin datos para graficar con el filtro seleccionado.")
@@ -455,6 +506,7 @@ with tab_gestion:
         st.markdown("##### 📈 Distribución por Estado")
         if not df_dash.empty:
             conteo_estado = df_dash['estado'].value_counts()
+            conteo_estado.name = "Cantidad"
             st.bar_chart(conteo_estado)
         else:
             st.info("Sin datos para graficar con el filtro seleccionado.")
@@ -576,7 +628,7 @@ with tab_mapa:
                 icon_marcador = 'ok'
                 estado_sitio = "🔵 SIN CASOS ACTIVOS (>15 días de cerrado)"
 
-            tickets_str = ", ".join(df_reg_tareas['ticket'].astype(str).unique())
+            tickets_str = ", ".join(df_mapa_raw[df_mapa_raw['region'] == reg]['ticket'].astype(str).unique())
             popup_text = f"<b>Región:</b> {reg}<br><b>Estatus Lugar:</b> {estado_sitio}<br><b>Tickets:</b> {tickets_str}"
             popup_popup = folium.Popup(popup_text, max_width=300)
             
